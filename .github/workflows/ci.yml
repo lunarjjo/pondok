@@ -34,6 +34,14 @@ jobs:
         env:
           PODOK_NETWORK_TESTS: "1"
 
+  # ADR-004: fully-bundled runtime. Built + VERIFIED on real arm64 hardware
+  # (proot -> box64 -> bedrock_server + RakNet round-trip) before any APK
+  # is allowed to embed it.
+  pack:
+    name: Pack · bundled runtime
+    uses: ./.github/workflows/runtime-pack.yml
+    permissions: {}
+
   core-integration:
     name: Core · REAL BDS integration
     runs-on: ubuntu-latest
@@ -75,7 +83,8 @@ jobs:
           PODOK_BDS_DIR: /home/runner/bds/extracted
 
   app:
-    name: App · analyze + tests + APK
+    name: App · analyze + tests + bundled APK
+    needs: [core-unit, pack]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -90,11 +99,21 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze --fatal-infos
       - run: flutter test
-      - name: Build release APK (targetSdk 28 by design — see ARCHITECTURE.md §2)
+      - name: Download verified runtime pack
+        uses: actions/download-artifact@v4
+        with:
+          name: runtime-pack
+          path: runtime-pack
+      - name: Embed verified runtime pack as app asset
+        run: |
+          mkdir -p assets
+          cp -v ../runtime-pack/runtime_pack.zip assets/runtime_pack.zip
+          ls -la assets/
+      - name: Build release APK (arm64; targetSdk 28 by design — see ARCHITECTURE.md §2)
         run: |
           echo "sdk.dir=${ANDROID_SDK_ROOT}" > android/local.properties
           echo "flutter.sdk=$(dirname $(dirname $(readlink -f $(which flutter))))" >> android/local.properties
-          flutter build apk --release
+          flutter build apk --release --target-platform android-arm64
       - name: Report APK
         run: |
           ls -la build/app/outputs/flutter-apk/

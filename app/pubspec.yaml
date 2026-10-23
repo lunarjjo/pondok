@@ -26,3 +26,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    # The fully-bundled runtime pack (ADR-004). NOT committed to git —
+    # CI injects the freshly built + arm64-verified pack before building
+    # the APK. Locally, put any placeholder zip at this path to build.
+    - assets/runtime_pack.zip
