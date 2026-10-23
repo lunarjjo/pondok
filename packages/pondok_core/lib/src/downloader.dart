@@ -10,7 +10,6 @@
 ///   recorded by us on first download for ledger provenance.
 library;
 
-import 'dart:convert';
 import 'dart:io';
 
 import 'version_manifest.dart';

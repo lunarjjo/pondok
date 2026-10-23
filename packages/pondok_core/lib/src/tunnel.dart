@@ -14,7 +14,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'bds_process.dart' show LineStreamSplitter;
-import 'console_line.dart';
 import 'security.dart';
 
 /// Connectivity state of the tunnel.

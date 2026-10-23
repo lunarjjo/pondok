@@ -37,4 +37,11 @@
             android:name="flutterEmbedding"
             android:value="2" />
     </application>
+    <!-- Flutter text-processing visibility (template 3.47) -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+    </queries>
 </manifest>

@@ -84,7 +84,7 @@ void main() {
       final dir = Directory('$instanceDir/backups')..createSync(recursive: true);
       final now = DateTime.now();
       for (var i = 0; i < 5; i++) {
-        final f = File('${dir.path}/b$i.zip')..writeAsBytesSync([i]);
+        File('${dir.path}/b$i.zip').writeAsBytesSync([i]);
         manifest.entries.add(BackupEntry(
           file: 'b$i.zip',
           createdAt: now.subtract(Duration(hours: 5 - i)),
