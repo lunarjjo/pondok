@@ -53,14 +53,20 @@ install -m 0755 "$STAGE/pack/proot" "$STAGE/runtime/proot"
 chmod +x "$STAGE/server/bedrock_server"
 
 # Product-managed default, applied identically by the app installer:
-# classic RakNet transport. The 1.26.x default (nethernet) is
-# signaling-service based — it never answers LAN-style unconnected pings
-# and its Minecraft-services dependency can kill the server at boot when
-# DNS is unreachable. Verified locally against the real binary: with
-# transport=raknet the unconnected ping is answered (0x1c pong, full
-# MCPE server string).
-sed -i 's/^transport=nethernet/transport=raknet/' "$STAGE/server/server.properties"
-echo "managed properties: $(grep '^transport=' "$STAGE/server/server.properties")"
+#   transport=raknet — the 1.26.x default (nethernet) is signaling-service
+#     based, never answers LAN unconnected pings, and its services
+#     dependency can kill the server at boot.
+#   online-mode=false — VERIFIED locally (proot discriminator script):
+#     plain proot breaks the online-mode Minecraft-services connection
+#     (60 s timeout then the server STOPS ITSELF). Offline mode + open
+#     allowlist is the correct default for a LAN phone server anyway
+#     (vanilla LAN behavior); M3 will surface the security toggles.
+sed -i -e 's/^transport=nethernet/transport=raknet/' \
+       -e 's/^online-mode=true/online-mode=false/' \
+       -e 's/^allow-list=true/allow-list=false/' \
+       "$STAGE/server/server.properties"
+echo "managed properties:"
+grep -E '^transport=|^online-mode=|^allow-list=' "$STAGE/server/server.properties"
 
 # Diagnostics: prove DNS + resolution work INSIDE the proot rootfs on this
 # host before blaming the server. The 'Minecraft services' check failing

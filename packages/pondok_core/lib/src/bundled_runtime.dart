@@ -288,27 +288,39 @@ class BundledRuntime {
 
   /// Product-managed defaults on the ACTIVE server.properties.
   ///
-  /// `transport=raknet` is required: the 1.26.x default (nethernet) is
-  /// signaling-service based — it never answers LAN-style unconnected
-  /// pings (verified against the real binary) and its Minecraft-services
-  /// dependency kills the server at boot when DNS is unreachable.
-  ///
-  /// This key is OWNED by pondok (the whole product — LAN join, RakNet
-  /// health check, playit tunneling — needs it): every existing
-  /// transport line is normalized and a missing one is appended, both
-  /// after fresh extraction and after repair-time restore.
+  /// Keys owned by pondok, applied after fresh extraction AND after
+  /// repair-time restore:
+  /// * `transport=raknet` — the 1.26.x default (nethernet) is
+  ///   signaling-service based: it never answers LAN-style unconnected
+  ///   pings (verified against the real binary) and its services
+  ///   dependency can kill the server at boot when unreachable.
+  /// * `online-mode=false` — verified with a local proot discriminator
+  ///   on the REAL binary: plain proot breaks the online-mode
+  ///   Minecraft-services connection (60 s timeout, then the server
+  ///   stops itself before ever printing "Server started."). Offline
+  ///   mode is the correct default for a LAN phone server; the security
+  ///   toggles surface in the M3 player-management UI.
+  /// * `allow-list=false` — matches vanilla LAN behavior; an empty
+  ///   allowlist with allow-list=true would silently block every player.
   Future<void> _ensureManagedProperties(String serverDir) async {
     final f = File('$serverDir/server.properties');
     if (!await f.exists()) return;
     final text = await f.readAsString();
     var managed = text;
-    final re = RegExp(r'^transport=.*$', multiLine: true);
-    if (re.hasMatch(managed)) {
-      managed = managed.replaceAllMapped(re, (_) => 'transport=raknet');
-    } else {
-      managed = managed.isEmpty || managed.endsWith('\n')
-          ? '${managed}transport=raknet\n'
-          : '$managed\ntransport=raknet\n';
+    const owned = {
+      'transport': 'raknet',
+      'online-mode': 'false',
+      'allow-list': 'false',
+    };
+    for (final e in owned.entries) {
+      final re = RegExp('^${e.key}=.*\$', multiLine: true);
+      if (re.hasMatch(managed)) {
+        managed = managed.replaceAllMapped(re, (_) => '${e.key}=${e.value}');
+      } else {
+        managed = managed.isEmpty || managed.endsWith('\n')
+            ? '$managed${e.key}=${e.value}\n'
+            : '$managed\n${e.key}=${e.value}\n';
+      }
     }
     if (managed != text) {
       await f.writeAsString(managed, flush: true);

@@ -54,7 +54,7 @@ void main() {
     bdsZip.addFile(
         'server.properties',
         utf8.encode('motd=Pondok test\nserver-port=19132\n'
-            'transport=nethernet\n'));
+            'transport=nethernet\nonline-mode=true\nallow-list=true\n'));
     bdsZip.addFile('allowlist.json', utf8.encode('[]\n'));
     await bdsZip.close();
 
@@ -118,10 +118,12 @@ void main() {
     expect(await File(p.box64).exists(), isTrue, reason: 'box64 inside rootfs');
     expect(await File(p.bedrockServer).exists(), isTrue);
     expect(await File('$baseDir/server/server.properties').exists(), isTrue);
-    // Product-managed transport: nethernet must never survive install.
+    // Product-managed keys: none of the shipped defaults may survive.
     final props = await File('$baseDir/server/server.properties').readAsString();
     expect(props, contains('transport=raknet'));
     expect(props, isNot(contains('nethernet')));
+    expect(props, contains('online-mode=false'));
+    expect(props, contains('allow-list=false'));
     expect(await File(p.installedMarker).exists(), isTrue, reason: 'marker last');
 
     expect((await runtime.verify()).isHealthy, isTrue);
