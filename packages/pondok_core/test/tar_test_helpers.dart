@@ -14,7 +14,7 @@ Uint8List _field(String s, int len) {
 }
 
 Uint8List _octal(int v, int len) =>
-    _field('$v'.toRadixString(8).padLeft(len - 1, '0') + '\x00', len);
+    _field(v.toRadixString(8).padLeft(len - 1, '0') + '\x00', len);
 
 Uint8List _base256(int v, int len) {
   final b = Uint8List(len);
@@ -29,7 +29,7 @@ Uint8List _base256(int v, int len) {
 
 Uint8List _header({
   required String name,
-  int mode = 0o644,
+  int mode = 0x1A4,
   int size = 0,
   String type = '0',
   String? link,
@@ -55,7 +55,7 @@ Uint8List _header({
   for (final b in h) {
     sum += b;
   }
-  final cs = '$sum'.toRadixString(8).padLeft(6, '0');
+  final cs = sum.toRadixString(8).padLeft(6, '0');
   h.setRange(148, 156, _field('$cs\x00 ', 8));
   return h;
 }
@@ -74,36 +74,47 @@ class TarBuilder {
     if (data != null && data.isNotEmpty) bytes.addAll(_pad(data));
   }
 
-  void file(String name, String content, {int mode = 0o644, bool base256 = false}) =>
+  void file(String name, String content, {int mode = 0x1A4, bool base256 = false}) =>
       add(_header(name: name, mode: mode, size: content.length, base256Size: base256),
           Uint8List.fromList(utf8.encode(content)));
 
-  void rawFile(String name, List<int> data, {int mode = 0o644}) =>
+  void rawFile(String name, List<int> data, {int mode = 0x1A4}) =>
       add(_header(name: name, mode: mode, size: data.length),
           Uint8List.fromList(data));
 
-  void dir(String name) => add(_header(name: name, type: '5', mode: 0o755));
+  void dir(String name) => add(_header(name: name, type: '5', mode: 0x1ED));
 
   void symlink(String name, String target) =>
-      add(_header(name: name, type: '2', link: target, mode: 0o777));
+      add(_header(name: name, type: '2', link: target, mode: 0x1FF));
 
   void hardlink(String name, String target) =>
-      add(_header(name: name, type: '1', link: target, mode: 0o644));
+      add(_header(name: name, type: '1', link: target, mode: 0x1ED));
 
-  void gnuLongName(String realName, {int mode = 0o644, String content = 'x'}) {
+  void gnuLongName(String realName, {int mode = 0x1A4, String content = 'x'}) {
     add(_header(name: '././@LongLink', type: 'L', size: realName.length + 1),
         Uint8List.fromList(utf8.encode('$realName\x00')));
     file(realName, content, mode: mode);
   }
 
   void paxPath(String realName, {String content = 'x'}) {
-    final record = '${realName.length + 7} path=$realName\n';
+    // pax record: "<len> path=<name>\n" where <len> counts the ENTIRE
+    // record including its own digits — solved by fixed point.
+    var recordLen = 0;
+    for (var digits = 1;; digits++) {
+      final candidate = digits + 6 + realName.length + 1;
+      if (candidate.toString().length == digits) {
+        recordLen = candidate;
+        break;
+      }
+    }
+    final record = '$recordLen path=$realName\n';
+    assert(record.length == recordLen, 'pax fixture length math');
     add(_header(name: ' PaxHeader', type: 'x', size: record.length),
         Uint8List.fromList(utf8.encode(record)));
     file(realName, content);
   }
 
-  void device(String name) => add(_header(name: name, type: '3', mode: 0o666));
+  void device(String name) => add(_header(name: name, type: '3', mode: 0x1B6));
 
   Uint8List finish() =>
       Uint8List.fromList([...bytes, ...List.filled(block * 2, 0)]);

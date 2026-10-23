@@ -44,11 +44,15 @@ class RuntimePackManifest {
   });
 
   static RuntimePackManifest parse(String json) {
-    final d = jsonDecode(json) as Map<String, dynamic>;
+    return fromMap(jsonDecode(json) as Map<String, dynamic>);
+  }
+
+  static RuntimePackManifest fromMap(Map<String, dynamic> d) {
     if (d['format'] != 'pondok-runtime-pack/1') {
       throw const FormatException('unknown runtime pack format');
     }
-    final rawMembers = (d['members'] as Map<String, dynamic>).cast<String, Map<String, dynamic>>();
+    final rawMembers =
+        (d['members'] as Map<String, dynamic>).cast<String, Map<String, dynamic>>();
     return RuntimePackManifest(
       format: d['format'] as String,
       packVersion: d['packVersion'] as int,
@@ -85,7 +89,7 @@ class BundledRuntimePaths {
   String get runtime => '$baseDir/runtime';
   String get proot => '$runtime/proot';
   String get rootfs => '$runtime/rootfs';
-  String get box64 => '$runtime/opt/box64/box64';
+  String get box64 => '$rootfs/opt/box64/box64';
   String get server => '$baseDir/server';
   String get bedrockServer => '$server/bedrock_server';
   String get installedMarker => '$baseDir/installed.json';
@@ -106,11 +110,15 @@ class BundledRuntime {
   BundledRuntime(String baseDir) : paths = BundledRuntimePaths(baseDir);
 
   /// Marker file content of the last successful install (null if none).
+  /// The marker wraps the pack manifest: {"installedAt":…, "manifest":…}.
   Future<RuntimePackManifest?> installedManifest() async {
     final f = File(paths.installedMarker);
     if (!await f.exists()) return null;
     try {
-      return RuntimePackManifest.parse(await f.readAsString());
+      final d = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+      final inner = d['manifest'];
+      if (inner is! Map<String, dynamic>) return null;
+      return RuntimePackManifest.fromMap(inner);
     } catch (_) {
       return null;
     }
@@ -167,7 +175,7 @@ class BundledRuntime {
       await Directory(newServer).create(recursive: true);
       await dl.extractZip('$packDir/bds.zip', newServer);
       if (!await File('$newServer/bedrock_server').exists()) {
-        throw const StateError('bds.zip has no bedrock_server');
+        throw StateError('bds.zip has no bedrock_server');
       }
 
       // Exec bits (dart:io cannot chmod): batched platform chmod.
@@ -364,8 +372,12 @@ BdsProcessConfig bundledRuntimeProfile(
   Duration? gracefulStopTimeout,
 }) {
   final p = BundledRuntimePaths(baseDir);
+  // Mirrors tools/stack_supervisor.py exactly: the '.' carries bedrock's
+  // own bundled x86_64 libs, the box64-x86_64-linux-gnu path carries the
+  // un-wrapped ones (libstdc++ etc.) from box64's official lib bundle.
   const inner = 'mkdir -p /tmp 2>/dev/null; '
-      'export HOME=/tmp PATH=/usr/bin:/bin LD_LIBRARY_PATH=.; '
+      'export HOME=/tmp PATH=/usr/bin:/bin '
+      'LD_LIBRARY_PATH=.:/usr/lib/box64-x86_64-linux-gnu; '
       'exec /opt/box64/box64 ./bedrock_server';
   return BdsProcessConfig(
     binary: p.proot,

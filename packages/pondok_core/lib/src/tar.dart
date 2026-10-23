@@ -18,6 +18,7 @@
 library;
 
 import 'dart:io';
+import 'dart:typed_data';
 
 const int _block = 512;
 const int _chunk = 1 << 20;
@@ -184,7 +185,7 @@ class _TarReader {
       out.flushSync();
       out.closeSync();
     }
-    if (entry.mode & 0o111 != 0) execPaths.add(target);
+    if (entry.mode & 0x49 != 0) execPaths.add(target);
     files++;
     onEntry?.call(entry.name);
   }
@@ -215,7 +216,7 @@ class _TarReader {
     }
     Directory(File(target).parent.path).createSync(recursive: true);
     File(source).copySync(target);
-    if (entry.mode & 0o111 != 0) execPaths.add(target);
+    if (entry.mode & 0x49 != 0) execPaths.add(target);
     hardlinks++;
     onEntry?.call(entry.name);
   }
@@ -223,11 +224,16 @@ class _TarReader {
   // -------------------------------------------------------------- low level
 
   String _join(String name) {
-    final n = name.replaceAll('\\', '/');
+    var n = name.replaceAll('\\', '/');
+    // Normalize leading "./" segments — `tar -C dir .` produces them and
+    // they would otherwise leak into execPaths/marker comparisons.
+    while (n.startsWith('./')) {
+      n = n.substring(2);
+    }
     if (n.startsWith('/') || n.contains('..')) {
       throw TarFormatException('unsafe entry name: $name');
     }
-    return '$destDir/$n';
+    return n.isEmpty ? destDir : '$destDir/$n';
   }
 
   Uint8List _readExact(int n) {

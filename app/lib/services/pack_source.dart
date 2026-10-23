@@ -19,13 +19,15 @@ class PackSource {
         'name': assetName,
         'dest': destFile,
       });
-    } on PlatformException catch (e) {
-      throw StateError('asset copy failed: ${e.code} ${e.message}');
     } on MissingPluginException {
       // Widget/host tests: no Kotlin side. Fall back to rootBundle — test
       // packs are tiny, so the memory spike is acceptable there.
+      // NOTE: caught BEFORE PlatformException — MissingPluginException is
+      // a subtype of it.
       final data = await rootBundle.load(assetName);
       await File(destFile).writeAsBytes(data.buffer.asUint8List(), flush: true);
+    } on PlatformException catch (e) {
+      throw StateError('asset copy failed: ${e.code} ${e.message}');
     }
   }
 }

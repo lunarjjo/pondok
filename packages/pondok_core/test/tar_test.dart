@@ -34,20 +34,21 @@ void main() {
     final b = TarBuilder()
       ..dir('usr/')
       ..dir('usr/bin/')
-      ..file('usr/bin/tool', '#!/bin/sh\necho hi\n', mode: 0o755)
+      ..file('usr/bin/tool', '#!/bin/sh\necho hi\n', mode: 0x1ED)
       ..file('etc/motd', 'welcome\n')
       ..symlink('usr/bin/alias', '../etc/motd')
       ..hardlink('usr/bin/hard', 'usr/bin/tool');
     final report = await extractTar(await writeTar(b), dest);
 
-    expect(report.files, 3);
+    // files counter excludes hardlinks (they get their own counter)
+    expect(report.files, 2);
     expect(report.dirs, 2);
     expect(report.symlinks, 1);
     expect(report.hardlinks, 1);
     expect(report.execPaths, [
       '$dest/usr/bin/tool',
       '$dest/usr/bin/hard',
-    ], reason: 'exec bit from mode 0755, hardlink inherits');
+    ], reason: 'exec bit from mode 0755; hardlink header carries the mode');
     expect(await File('$dest/etc/motd').readAsString(), 'welcome\n');
     expect(Link('$dest/usr/bin/alias').targetSync(), '../etc/motd');
     expect(await File('$dest/usr/bin/hard').readAsString(), '#!/bin/sh\necho hi\n');
@@ -71,7 +72,7 @@ void main() {
   });
 
   test('base-256 (GNU binary) size field decodes', () async {
-    final b = TarBuilder()..file('big.bin', 'A' * 300, base256: true, mode: 0o755);
+    final b = TarBuilder()..file('big.bin', 'A' * 300, base256: true, mode: 0x1ED);
     final report = await extractTar(await writeTar(b), dest);
     expect(report.bytes, 300);
     expect(await File('$dest/big.bin').length(), 300);
@@ -98,7 +99,7 @@ void main() {
   });
 
   test('empty file (size 0) extracts as empty', () async {
-    final b = TarBuilder()..file('empty.marker', '', mode: 0o755);
+    final b = TarBuilder()..file('empty.marker', '', mode: 0x1ED);
     final report = await extractTar(await writeTar(b), dest);
     expect(report.files, 1);
     expect(await File('$dest/empty.marker').length(), 0);
@@ -123,6 +124,9 @@ void main() {
     final src = Directory('${tmp.path}/tree');
     await Directory('${src.path}/usr/bin').create(recursive: true);
     await File('${src.path}/usr/bin/exec.sh').writeAsString('#!/bin/sh\n');
+    // writeAsString creates 0644 — make it executable so the tar header
+    // carries the exec bit the execPaths assertion below relies on.
+    await Process.run('chmod', ['+x', '${src.path}/usr/bin/exec.sh']);
     await File('${src.path}/data.txt').writeAsString('payload');
     await Link('${src.path}/usr/bin/lnk').create('../data.txt');
 

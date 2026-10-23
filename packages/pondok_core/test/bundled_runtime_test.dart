@@ -33,16 +33,16 @@ void main() {
     await Directory(src).create(recursive: true);
 
     // proot: a stand-in script (installer only copies + chmods it).
-    await File('$src/proot').writeAsString('#!/bin/sh\necho fake-proot "$@"\n');
+    await File('$src/proot').writeAsString('#!/bin/sh\necho fake-proot\n');
 
     // rootfs.tar: contains box64 where the profile expects it.
     final tb = TarBuilder()
       ..dir('opt/')
       ..dir('opt/box64/')
-      ..file('opt/box64/box64', '#!/bin/sh\necho fake-box64\n', mode: 0o755)
+      ..file('opt/box64/box64', '#!/bin/sh\necho fake-box64\n', mode: 0x1ED)
       ..dir('usr/')
       ..dir('usr/bin/')
-      ..file('usr/bin/sh', '#!/bin/sh\n', mode: 0o755);
+      ..file('usr/bin/sh', '#!/bin/sh\n', mode: 0x1ED);
     await File('$src/rootfs.tar').writeAsBytes(tb.finish());
 
     // bds.zip: fake-but-plausibly-sized bedrock_server + default configs.
@@ -138,7 +138,7 @@ void main() {
     // a different proot but the ORIGINAL manifest sha.
     final raw = await File(pack).readAsBytes();
     final marker = utf8.encode('fake-proot');
-    final idx = raw.indexOf(Uint8List.fromList(marker));
+    final idx = _indexOfSub(raw, marker);
     expect(idx, greaterThan(0), reason: 'fixture sanity');
     raw[idx] = 0x46; // 'F' — one byte flip
     final tampered = '${tmp.path}/tampered_pack.zip';
@@ -203,7 +203,7 @@ void main() {
     final inner = cfg.args.last;
     expect(inner, contains('/opt/box64/box64'));
     expect(inner, contains('bedrock_server'));
-    expect(inner, contains('LD_LIBRARY_PATH=.'));
+    expect(inner, contains('LD_LIBRARY_PATH=.:/usr/lib/box64-x86_64-linux-gnu'));
     // Proot traces the whole process tree — startup budget is generous.
     expect(cfg.startupTimeout, greaterThanOrEqualTo(const Duration(minutes: 10)));
   });
@@ -224,4 +224,17 @@ void main() {
       expect(r.exitCode, 0, reason: '$f must be executable');
     }
   });
+}
+
+/// Uint8List.indexOf searches for a single int element — we need a
+/// sub-array search for the tamper test.
+int _indexOfSub(List<int> haystack, List<int> needle) {
+  outer:
+  for (var i = 0; i <= haystack.length - needle.length; i++) {
+    for (var j = 0; j < needle.length; j++) {
+      if (haystack[i + j] != needle[j]) continue outer;
+    }
+    return i;
+  }
+  return -1;
 }

@@ -47,10 +47,18 @@ class Server:
         self.runtime_dir = os.path.join(stage, "runtime")
         rootfs = os.path.join(self.runtime_dir, "rootfs")
         box64 = os.path.join(rootfs, "opt", "box64", "box64")
+        # box64's official x86_64 lib bundle — the un-wrapped libs
+        # (libstdc++ etc.) bedrock_server's ELF actually needs.
+        x86libs = "/usr/lib/box64-x86_64-linux-gnu"
         if mode == "direct":
             self.cmd = [box64, "./bedrock_server"]
             self.cwd = self.server_dir
-            self.env = {**os.environ, "LD_LIBRARY_PATH": self.server_dir}
+            libs = (
+                f"{os.path.join(rootfs, 'usr/lib/box64-x86_64-linux-gnu')}"
+                f":{self.server_dir}"
+            )
+            self.env = {**os.environ, "LD_LIBRARY_PATH": libs,
+                        "BOX64_LD_LIBRARY_PATH": libs}
         else:
             self.cmd = [
                 os.path.join(self.runtime_dir, "proot"),
@@ -58,8 +66,9 @@ class Server:
                 "-b", f"{self.server_dir}:/srv/server",
                 "-w", "/srv/server",
                 "/bin/sh", "-c",
-                "mkdir -p /tmp 2>/dev/null; export HOME=/tmp "
-                "PATH=/usr/bin:/bin LD_LIBRARY_PATH=.; "
+                "mkdir -p /tmp 2>/dev/null; "
+                "export HOME=/tmp PATH=/usr/bin:/bin "
+                f"LD_LIBRARY_PATH=.:{x86libs}; "
                 "exec /opt/box64/box64 ./bedrock_server",
             ]
             self.cwd = stage

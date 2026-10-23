@@ -31,7 +31,14 @@ BOX64_TAG="v0.4.4"
 PROOT_TAG="v5.5.0"
 UBUNTU_BASE_VERSION="24.04.5"
 UBUNTU_BASE_SHA256="a91d5a93010193712d346d761372b7c9db6dfcf093893161c64ca107f05914f2"
-PACK_VERSION="${PACK_VERSION:-1}"
+# box64's official x86_64 library bundle: bedrock_server needs real x86_64
+# .so files (libstdc++, libgcc_s, …) that box64 does NOT wrap — verified
+# the hard way: without them box64 dies with
+# "Error: Loading needed libs in elf ./bedrock_server" (exit 255).
+X86LIBS_URL="https://github.com/ptitSeb/box64/releases/download/${BOX64_TAG}/box64-bundle-x86-libs-${BOX64_TAG}.tar.gz"
+X86LIBS_SHA256="1d4a8787a8a92267c1be673ec194c69e3bb33d14c800575d94131084142fcff0"
+X86LIBS_BYTES="34368070"
+PACK_VERSION="${PACK_VERSION:-2}"
 
 OUT_DIR="${1:-build/runtime_pack}"
 WORK="$(mktemp -d)"
@@ -41,7 +48,7 @@ log() { printf '\033[1;36m[pack]\033[0m %s\n' "$*"; }
 s() { if command -v sudo >/dev/null 2>&1; then sudo "$@"; else "$@"; fi; }
 
 export BOX64_TAG PROOT_TAG UBUNTU_BASE_VERSION UBUNTU_BASE_SHA256
-export BDS_VERSION BDS_SHA256 BDS_ZIP_BYTES PACK_VERSION
+export BDS_VERSION BDS_SHA256 BDS_ZIP_BYTES PACK_VERSION X86LIBS_URL X86LIBS_SHA256 X86LIBS_BYTES
 
 [ "$(uname -m)" = "aarch64" ] || { echo "FATAL: arm64 host required, got $(uname -m)" >&2; exit 1; }
 log "host ok: aarch64 · $(nproc) cpu · $(free -h | awk '/^Mem:/{print $2}') ram"
@@ -94,6 +101,15 @@ tar -xzf "$WORK/$UB_NAME" -C "$WORK/rootfs"
 # box64 lives INSIDE the rootfs — this is the binary the device executes.
 mkdir -p "$WORK/rootfs/opt/box64"
 install -m 0755 "$BOX64_BIN" "$WORK/rootfs/opt/box64/box64"
+
+log "[3b] box64 x86_64 libs bundle (the un-wrapped libs bedrock_server needs)"
+curl -fsSL -o "$WORK/x86libs.tar.gz" "$X86LIBS_URL"
+echo "$X86LIBS_SHA256  $WORK/x86libs.tar.gz" | sha256sum -c - >/dev/null \
+  || { echo "FATAL: x86-libs bundle sha mismatch" >&2; exit 1; }
+tar -xzf "$WORK/x86libs.tar.gz" -C "$WORK/rootfs"
+# The bundle also ships i386 libs we never load — drop them (pack size).
+rm -rf "$WORK/rootfs/usr/lib/box64-i386-linux-gnu"
+ls "$WORK/rootfs/usr/lib/box64-x86_64-linux-gnu/" | wc -l
 
 # Belt & suspenders: copy any box64 .so dep missing from ubuntu-base.
 # The runner is the same distro+arch, so its copies are drop-in.
@@ -150,6 +166,9 @@ manifest = {
                    "path": "/opt/box64/box64"},
         "rootfs": {"base": "ubuntu-base-" + os.environ["UBUNTU_BASE_VERSION"] + "-arm64",
                    "sha256_gz": os.environ["UBUNTU_BASE_SHA256"]},
+        "x86libs": {"source": "box64-bundle-x86-libs-" + os.environ["BOX64_TAG"],
+                    "sha256": os.environ["X86LIBS_SHA256"],
+                    "path": "/usr/lib/box64-x86_64-linux-gnu"},
         "bds":    {"version": os.environ["BDS_VERSION"],
                    "sha256": os.environ["BDS_SHA256"],
                    "zipBytes": int(os.environ["BDS_ZIP_BYTES"])},
