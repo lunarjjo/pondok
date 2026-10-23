@@ -97,8 +97,6 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
-      - run: flutter analyze --fatal-infos
-      - run: flutter test
       - name: Download verified runtime pack
         uses: actions/download-artifact@v4
         with:
@@ -109,6 +107,10 @@ jobs:
           mkdir -p assets
           cp -v ../runtime-pack/runtime_pack.zip assets/runtime_pack.zip
           ls -la assets/
+      # analyze AFTER embedding: the analyzer checks asset existence
+      # (asset_does_not_exist is fatal under --fatal-infos).
+      - run: flutter analyze --fatal-infos
+      - run: flutter test
       - name: Build release APK (arm64; targetSdk 28 by design — see ARCHITECTURE.md §2)
         run: |
           echo "sdk.dir=${ANDROID_SDK_ROOT}" > android/local.properties
