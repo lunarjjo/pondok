@@ -40,9 +40,13 @@ class BdsExit {
 
 /// Configuration for one supervised start.
 class BdsProcessConfig {
-  /// Absolute path to the bedrock_server executable (or a wrapper such as
-  /// box64 — see RuntimeProfile in the app layer).
+  /// Absolute path to the executable (or a wrapper such as proot — see
+  /// RuntimeProfile in bundled_runtime.dart).
   final String binary;
+
+  /// Arguments for the executable. Empty for a direct bedrock_server
+  /// launch; a proot wrapper fills these in (rootfs, binds, inner command).
+  final List<String> args;
 
   /// Working directory = the server instance directory (where
   /// server.properties and worlds/ live).
@@ -63,6 +67,7 @@ class BdsProcessConfig {
 
   const BdsProcessConfig({
     required this.binary,
+    this.args = const [],
     required this.workingDir,
     this.environment = const {},
     this.startupTimeout = const Duration(minutes: 10),
@@ -137,7 +142,7 @@ class BdsProcess {
     try {
       _process = await Process.start(
         config.binary,
-        const [],
+        config.args,
         workingDirectory: config.workingDir,
         environment: env,
       );

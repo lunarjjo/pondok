@@ -1,18 +1,121 @@
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-/// Honest home screen for milestone M1: the runtime layer is not yet
-/// installable from the app (that is milestone M2), so instead of a fake
-/// dashboard this screen states exactly what exists and what does not —
-/// the same discipline as docs/PHASE0_REPORT.md.
+import '../services/runtime_setup_controller.dart';
+import '../services/server_controller.dart';
+import 'package:pondok_core/pondok_core.dart';
+
+/// The zero-setup home screen (M2).
 ///
-/// When M2 lands, this becomes the server list + onboarding entry.
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
+/// First launch: unpacks the bundled runtime from the APK — a single
+/// progress indicator, no configuration, no downloads. Then: accept the
+/// Minecraft EULA once, press Start, play. Everything the server needs
+/// (proot, ubuntu rootfs, box64, the official BDS distribution) already
+/// shipped inside the APK itself.
+class HomeScreen extends StatefulWidget {
+  /// Injection points for widget tests.
+  final RuntimeSetupController? setupController;
+  final ServerController? serverController;
+
+  const HomeScreen({super.key, this.setupController, this.serverController});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  RuntimeSetupController? _setup;
+  ServerController? _server;
+  bool _eulaAccepted = false;
+  final _commandField = TextEditingController();
+  final _consoleScroll = ScrollController();
+
+  static const _eulaKey = 'eula_accepted_v1';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadEula();
+    _boot();
+  }
+
+  Future<void> _boot() async {
+    if (widget.setupController != null && widget.serverController != null) {
+      _attach(widget.setupController!, widget.serverController!);
+      await _setup!.ensureInstalled();
+      return;
+    }
+    // Production path: app-private files dir.
+    final dir = await _resolveBaseDir();
+    if (!mounted) return;
+    _attach(
+      RuntimeSetupController(baseDir: '$dir/pondok'),
+      ServerController(baseDir: '$dir/pondok'),
+    );
+    await _setup!.ensureInstalled();
+  }
+
+  Future<String> _resolveBaseDir() async {
+    // App-private internal storage (no permissions, persists across
+    // launches, executable allowed at targetSdk 28 — ARCHITECTURE.md §2).
+    final dir = await getApplicationSupportDirectory();
+    return dir.path;
+  }
+
+  void _attach(RuntimeSetupController setup, ServerController server) {
+    setState(() {
+      _setup = setup;
+      _server = server;
+    });
+    setup.addListener(_onChange);
+    server.addListener(_onChange);
+  }
+
+  void _onChange() {
+    if (mounted) setState(() {});
+    _autoScrollConsole();
+  }
+
+  Future<void> _loadEula() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() => _eulaAccepted = prefs.getBool(_eulaKey) ?? false);
+  }
+
+  Future<void> _acceptEula() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_eulaKey, true);
+    setState(() => _eulaAccepted = true);
+  }
+
+  void _autoScrollConsole() {
+    if (!_consoleScroll.hasClients) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_consoleScroll.hasClients) {
+        _consoleScroll.animateTo(
+          _consoleScroll.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _setup?.removeListener(_onChange);
+    _server?.removeListener(_onChange);
+    _commandField.dispose();
+    _consoleScroll.dispose();
+    super.dispose();
+  }
+
+  // ------------------------------------------------------------------ build
 
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
-    final c = Theme.of(context).colorScheme;
+    final setup = _setup;
     return Scaffold(
       appBar: AppBar(
         title: Column(
@@ -22,77 +125,72 @@ class HomeScreen extends StatelessWidget {
             Text('Bedrock Mobile Server Manager', style: t.bodySmall),
           ],
         ),
-        backgroundColor: c.surfaceContainerHighest,
+        backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          const _StatusCard(
-            icon: Icons.foundation_outlined,
-            title: 'Phase 0 complete',
-            body: 'Feasibility researched and proven with the real BDS '
-                '1.26.52.3 binary: supervised start, console round-trip, '
-                'allowlist sync, graceful stop (exit 0), world persistence, '
-                'crash detection. Evidence: docs/evidence/ in the repository.',
-            trailing: _Badge('VERIFIED'),
-          ),
-          const SizedBox(height: 12),
-          const _StatusCard(
-            icon: Icons.terminal_outlined,
-            title: 'Core library onboard',
-            body: 'pondok_core ships in this APK: process supervisor, console '
-                'parser, typed server.properties registry (1.26.x), allowlist, '
-                'backup/restore with CRC validation, journaled update '
-                'pipeline, tunnel abstraction. 103 unit tests + 6 real-binary '
-                'integration tests green in CI.',
-            trailing: _Badge('ONBOARD'),
-          ),
-          const SizedBox(height: 12),
-          const _StatusCard(
-            icon: Icons.phone_android_outlined,
-            title: 'On-device runtime: not installed yet',
-            body: 'Installing the Box64/proot runtime and downloading the '
-                'official server distribution happens in milestone M2. '
-                'Nothing on this screen is simulated — there is no server '
-                'running because none has been installed.',
-            trailing: _Badge('PENDING', muted: true),
-          ),
-          const SizedBox(height: 24),
-          Text(
-            'Status sesi pengembangan',
-            style: t.titleSmall,
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Proyek ini hanya meng-host server pada perangkat yang terverifikasi '
-            'kompatibel. Layanan internet publik lewat tunnel UDP (playit.gg) '
-            'dan performa ARM64 melalui Box64 adalah kemampuan yang terdokumentasi '
-            'komunitas — verifikasi pada perangkat nyata adalah bagian dari '
-            'Definition of Done (lihat ROADMAP.md).',
-            style: t.bodySmall,
-          ),
-        ],
-      ),
+      body: setup == null || _server == null
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                _RuntimeCard(setup: setup),
+                const SizedBox(height: 12),
+                if (_eulaAccepted) ...[
+                  _ServerCard(server: _server!),
+                  const SizedBox(height: 12),
+                  _ConsoleCard(
+                    server: _server!,
+                    controller: _commandField,
+                    scroll: _consoleScroll,
+                  ),
+                  const SizedBox(height: 12),
+                ] else
+                  _EulaCard(onAccept: _acceptEula),
+                const SizedBox(height: 12),
+                _HonestyCard(manifest: setup.manifest),
+              ],
+            ),
     );
   }
 }
 
-class _StatusCard extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String body;
-  final Widget trailing;
+// ------------------------------------------------------------------ runtime
 
-  const _StatusCard({
-    required this.icon,
-    required this.title,
-    required this.body,
-    required this.trailing,
-  });
+class _RuntimeCard extends StatelessWidget {
+  final RuntimeSetupController setup;
+  const _RuntimeCard({required this.setup});
 
   @override
   Widget build(BuildContext context) {
     final c = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    final m = setup.manifest;
+
+    Widget trailing;
+    String body;
+    switch (setup.phase) {
+      case RuntimeSetupPhase.checking:
+      case RuntimeSetupPhase.copyingPack:
+      case RuntimeSetupPhase.installing:
+        trailing = const SizedBox(
+          width: 18, height: 18,
+          child: CircularProgressIndicator(strokeWidth: 2.5),
+        );
+        body = '${setup.phase.label}\n'
+            'Sekali saja — setelah ini server siap dipakai selamanya.';
+        break;
+      case RuntimeSetupPhase.ready:
+        trailing = _Badge('SIAP', color: c.primaryContainer, fg: c.onPrimaryContainer);
+        body = 'Semua komponen terpasang dan siap:\n'
+            '• Minecraft Bedrock Dedicated Server ${m?.bdsVersion ?? '?'} (distribusi resmi)\n'
+            '• Box64 ${m?.box64Tag ?? '?'} + proot ${m?.prootTag ?? '?'} (penerjemah x86-64 → arm64)\n'
+            '• Semuanya dibundel di dalam APK — tidak ada unduhan.';
+        break;
+      case RuntimeSetupPhase.failed:
+        trailing = _Badge('GAGAL', color: c.errorContainer, fg: c.onErrorContainer);
+        body = setup.error ?? 'Kesalahan tak diketahui';
+        break;
+    }
+
     return Card(
       elevation: 0,
       color: c.surfaceContainerLow,
@@ -101,18 +199,27 @@ class _StatusCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Icon(icon, color: c.primary),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(title, style: Theme.of(context).textTheme.titleMedium),
-                ),
-                trailing,
-              ],
-            ),
+            Row(children: [
+              Icon(Icons.inventory_2_outlined, color: c.primary),
+              const SizedBox(width: 12),
+              Expanded(child: Text('Runtime', style: t.titleMedium)),
+              trailing,
+            ]),
             const SizedBox(height: 8),
-            Text(body, style: Theme.of(context).textTheme.bodyMedium),
+            Text(body, style: t.bodyMedium),
+            if (setup.phase == RuntimeSetupPhase.installing ||
+                setup.phase == RuntimeSetupPhase.copyingPack) ...[
+              const SizedBox(height: 12),
+              LinearProgressIndicator(minHeight: 6, borderRadius: BorderRadius.circular(3)),
+            ],
+            if (setup.phase == RuntimeSetupPhase.failed) ...[
+              const SizedBox(height: 8),
+              FilledButton.tonalIcon(
+                onPressed: () => setup.ensureInstalled(),
+                icon: const Icon(Icons.refresh),
+                label: const Text('Coba lagi'),
+              ),
+            ],
           ],
         ),
       ),
@@ -120,18 +227,295 @@ class _StatusCard extends StatelessWidget {
   }
 }
 
-class _Badge extends StatelessWidget {
-  final String label;
-  final bool muted;
-  const _Badge(this.label, {this.muted = false});
+// -------------------------------------------------------------------- eula
+
+class _EulaCard extends StatelessWidget {
+  final VoidCallback onAccept;
+  const _EulaCard({required this.onAccept});
 
   @override
   Widget build(BuildContext context) {
     final c = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    return Card(
+      elevation: 0,
+      color: c.surfaceContainerLow,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Icon(Icons.gavel_outlined, color: c.primary),
+              const SizedBox(width: 12),
+              Expanded(child: Text('Persetujuan EULA', style: t.titleMedium)),
+            ]),
+            const SizedBox(height: 8),
+            Text(
+              'Menjalankan server Minecraft tunduk pada Minecraft End User '
+              'License Agreement dari Mojang. Kamu setuju untuk mematuhinya '
+              'sebelum server dinyalakan.',
+              style: t.bodyMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'https://www.minecraft.net/eula',
+              style: t.bodySmall?.copyWith(color: c.primary),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: onAccept,
+              icon: const Icon(Icons.check),
+              label: const Text('Saya setuju — lanjutkan'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ------------------------------------------------------------------ server
+
+class _ServerCard extends StatelessWidget {
+  final ServerController server;
+  const _ServerCard({required this.server});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    final running = server.isRunning;
+
+    Color chipColor;
+    Color chipFg;
+    switch (server.state) {
+      case BdsState.running:
+        chipColor = c.primaryContainer;
+        chipFg = c.onPrimaryContainer;
+        break;
+      case BdsState.starting:
+      case BdsState.stopping:
+        chipColor = c.secondaryContainer;
+        chipFg = c.onSecondaryContainer;
+        break;
+      case BdsState.crashed:
+      case BdsState.startupFailed:
+        chipColor = c.errorContainer;
+        chipFg = c.onErrorContainer;
+        break;
+      default:
+        chipColor = c.surfaceContainerHighest;
+        chipFg = c.onSurfaceVariant;
+    }
+
+    final up = server.uptime;
+    final upLabel = up == null
+        ? ''
+        : 'aktif ${up.inMinutes} mnt ${up.inSeconds % 60} dtk';
+
+    return Card(
+      elevation: 0,
+      color: c.surfaceContainerLow,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Icon(
+                running ? Icons.play_circle_fill : Icons.play_circle_outline,
+                color: c.primary,
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Text('Server', style: t.titleMedium)),
+              _Badge(server.stateLabel, color: chipColor, fg: chipFg),
+            ]),
+            const SizedBox(height: 8),
+            Text(
+              running
+                  ? 'Pemain bisa bergabung lewat LAN: IP perangkat ini, port 19132 '
+                    '(default).$upLabel'
+                  : 'Sekali tombol — proot + box64 + bedrock_server menyala '
+                    'dalam satu langkah.',
+              style: t.bodyMedium,
+            ),
+            const SizedBox(height: 12),
+            Row(children: [
+              FilledButton.icon(
+                onPressed: running ? null : () => server.start(),
+                icon: const Icon(Icons.power_settings_new),
+                label: const Text('Start'),
+              ),
+              const SizedBox(width: 12),
+              OutlinedButton.icon(
+                onPressed: running ? () => server.stop() : null,
+                icon: const Icon(Icons.stop),
+                label: const Text('Stop'),
+              ),
+            ]),
+            if (server.lastExit != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Berhenti terakhir: ${server.lastExit}',
+                style: t.bodySmall,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ----------------------------------------------------------------- console
+
+class _ConsoleCard extends StatelessWidget {
+  final ServerController server;
+  final TextEditingController controller;
+  final ScrollController scroll;
+
+  const _ConsoleCard({
+    required this.server,
+    required this.controller,
+    required this.scroll,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    final lines = server.lines;
+    return Card(
+      elevation: 0,
+      color: c.surfaceContainerLow,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Icon(Icons.terminal_outlined, color: c.primary),
+              const SizedBox(width: 12),
+              Expanded(child: Text('Konsol', style: t.titleMedium)),
+              Text('${lines.length} baris', style: t.bodySmall),
+            ]),
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              height: 220,
+              decoration: BoxDecoration(
+                color: const Color(0xFF101418),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: lines.isEmpty
+                  ? Center(
+                      child: Text(
+                        'Konsol menyala bersama server.',
+                        style: t.bodySmall?.copyWith(color: Colors.white54),
+                      ),
+                    )
+                  : ListView.builder(
+                      controller: scroll,
+                      padding: const EdgeInsets.all(10),
+                      itemCount: lines.length,
+                      itemBuilder: (_, i) => Text(
+                        lines[i].raw,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 11,
+                          color: Color(0xFFB8C4CC),
+                        ),
+                      ),
+                    ),
+            ),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(
+                child: TextField(
+                  controller: controller,
+                  enabled: server.isRunning,
+                  decoration: const InputDecoration(
+                    hintText: 'Perintah konsol (mis. list)',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                  onSubmitted: (cmd) => _send(server, cmd),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton.filled(
+                onPressed: server.isRunning ? () => _send(server, controller.text) : null,
+                icon: const Icon(Icons.send),
+              ),
+            ]),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _send(ServerController server, String cmd) {
+    if (cmd.trim().isEmpty) return;
+    server.sendCommand(cmd.trim());
+    controller.clear();
+  }
+}
+
+// ------------------------------------------------------------------ honesty
+
+class _HonestyCard extends StatelessWidget {
+  final RuntimePackManifest? manifest;
+  const _HonestyCard({required this.manifest});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    return Card(
+      elevation: 0,
+      color: c.surfaceContainerLowest,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Icon(Icons.science_outlined, color: c.onSurfaceVariant),
+              const SizedBox(width: 12),
+              Expanded(child: Text('Status verifikasi', style: t.titleSmall)),
+            ]),
+            const SizedBox(height: 8),
+            Text(
+              'Terverifikasi di CI pada perangkat keras arm64 ASLI: stack '
+              'proot → box64 → bedrock_server menyala, menjawab ping protokol '
+              'RakNet, konsol dua arah, stop bersih (exit 0), world bertahan '
+              'lintas restart (workflow "runtime-pack").\n'
+              'Belum terverifikasi: uji pada HP fisik — butir Definition of '
+              'Done yang terbuka; performa di HP bervariasi sesuai chipset.',
+              style: t.bodySmall,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// -------------------------------------------------------------------- misc
+
+class _Badge extends StatelessWidget {
+  final String label;
+  final Color color;
+  final Color fg;
+  const _Badge(this.label, {required this.color, required this.fg});
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: muted ? c.surfaceContainerHighest : c.primaryContainer,
+        color: color,
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
@@ -140,7 +524,7 @@ class _Badge extends StatelessWidget {
           fontSize: 11,
           fontWeight: FontWeight.w700,
           letterSpacing: 0.5,
-          color: muted ? c.onSurfaceVariant : c.onPrimaryContainer,
+          color: fg,
         ),
       ),
     );
