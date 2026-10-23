@@ -1,8 +1,10 @@
 package com.lunarjjo.pondok
 
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SELinux
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -44,6 +46,33 @@ class MainActivity : FlutterActivity() {
                                 }
                             }
                         }.start()
+                    }
+                    "deviceInfo" -> {
+                        // Diagnostics context (D-17): model/ABI/SELinux state
+                        // decorate every bug report. Page size goes through
+                        // reflection so the build never depends on an
+                        // android.system API level.
+                        val info = mutableMapOf<String, String>()
+                        info["model"] = Build.MODEL ?: "?"
+                        info["manufacturer"] = Build.MANUFACTURER ?: "?"
+                        info["android"] = Build.VERSION.RELEASE ?: "?"
+                        info["sdk"] = Build.VERSION.SDK_INT.toString()
+                        info["abis"] = Build.SUPPORTED_ABIS.joinToString(",")
+                        info["pageSize"] = try {
+                            val os = Class.forName("android.system.Os")
+                            val constants = Class.forName("android.system.OsConstants")
+                            val sc = constants.getField("_SC_PAGESIZE").get(null)
+                            os.getMethod("sysconf", Int::class.javaPrimitiveType)
+                                .invoke(null, sc).toString()
+                        } catch (t: Throwable) {
+                            "unknown"
+                        }
+                        info["selinuxEnforcing"] = try {
+                            SELinux.isSELinuxEnforced().toString()
+                        } catch (t: Throwable) {
+                            "unknown"
+                        }
+                        result.success(info)
                     }
                     else -> result.notImplemented()
                 }

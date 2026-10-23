@@ -149,3 +149,42 @@ The Android AssetManager needs `flutter_assets/<name>`; rootBundle needs
 the plain pubspec name. Mapping belonged in ONE place (PackSource), not
 at call sites — the controller was passing the prefixed form and the
 test fallback could never load it.
+
+---
+
+## Session 2 (2026-10-24) — first on-device bug report (owner's phone)
+
+### D-17 · "Kehilangan proses (crash)" with zero output — three stacked observability bugs
+**Where:** `bds_process.dart`, `server_controller.dart`, `home_screen.dart`
+· **Severity: the shipped APK was undebuggable on device.**
+
+**Report (owner, verbatim):** start button always ends in "Kehilangan
+Proses (crash)", "tidak ada log error atau apapun yang tampil".
+
+**Chain reconstruction** (targetSdk 28 + the `crashed` state proves the
+child WAS spawned and died instantly — a spawn refusal would have shown
+"Gagal menyala"):
+
+1. **Exit race.** `_onExit` ran straight off `exitCode` and closed the
+   line stream immediately; the dying process's stderr bytes were still
+   in the pipe (Dart delivers pipe data asynchronously — the kernel can
+   reap the child BEFORE the pipe bytes reach the event loop). The one
+   message that explained the death was dropped. Reproduced on Linux
+   with `sh -c 'echo boom >&2; exit 7'` — pre-fix, `boom` vanished.
+2. **Swallowed exception.** The Start button called `server.start()`
+   un-awaited; the `BdsStartupException` carrying the reason became an
+   unhandled async error (invisible in release builds).
+3. **Nothing rendered.** `BdsExit.detail` was `'pid N'` — the exit code,
+   signal, and output tail were never surfaced anywhere.
+
+**Fixes** (ADR-005): drain-before-finalize with per-pipe EOF completers
+(bounded 5 s), signal-decoded exit details, `BdsStartupException` as the
+uniform start() contract (the old `rethrow` leaked the raw
+ProcessException — callers keyed on the wrapper missed it; found by the
+new unit test), failure box + probe ladder + persistent log + one-tap
+bug report in the UI, DIRECT fallback profile, `direct-ld` CI gating.
+
+**Honest status:** the ON-DEVICE root cause (why proot died on that
+phone) remains UNKNOWN — the sandbox has no Android hardware. The new
+build either runs (DIRECT fallback), or prints exactly which layer died
+with what evidence (#19 remains open until the owner runs it).

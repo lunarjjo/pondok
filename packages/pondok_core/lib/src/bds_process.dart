@@ -32,10 +32,44 @@ class BdsExit {
   final int code;
   final BdsExitKind kind;
   final String detail;
-  const BdsExit(this.code, this.kind, this.detail);
+
+  /// Last raw output lines the process emitted (stdout + stderr merged),
+  /// newest last — the single most valuable crash clue, previously lost to
+  /// the exit race (D-17): the child writes its dying message into the pipe
+  /// microseconds before the kernel reaps it, and `exitCode` completes
+  /// BEFORE the pipe bytes reach Dart's event loop.
+  final String outputTail;
+
+  const BdsExit(this.code, this.kind, this.detail, {this.outputTail = ''});
 
   @override
   String toString() => 'BdsExit(code: $code, kind: $kind, $detail)';
+}
+
+/// Human-readable reading of a raw wait status — Dart reports the exit code
+/// as a NEGATIVE number when the child was killed by a signal, so a death by
+/// SIGILL (unsupported CPU instruction) is distinguishable from SIGSYS
+/// (seccomp) and from a plain `exit(1)`.
+String describeExitCode(int code) {
+  if (code >= 0) {
+    return code == 0 ? 'exit 0 (normal)' : 'exit $code';
+  }
+  const signals = {
+    1: 'SIGHUP', 2: 'SIGINT', 3: 'SIGQUIT', 4: 'SIGILL',
+    5: 'SIGTRAP', 6: 'SIGABRT', 7: 'SIGBUS', 8: 'SIGFPE',
+    9: 'SIGKILL', 11: 'SIGSEGV', 13: 'SIGPIPE', 15: 'SIGTERM',
+    31: 'SIGSYS',
+  };
+  const hints = {
+    4: ' — instruksi ilegal: CPU/chipset mungkin tak mendukung instruksi yang dipakai penerjemah',
+    6: ' — abort internal (libc/runtime menemukan kondisi tak valid)',
+    7: ' — akses memori tak selaras/tak valid',
+    11: ' — kesalahan memori (dynarec/JIT umumnya)',
+    31: ' — syscall diblokir filter keamanan (seccomp) Android/OEM',
+  };
+  final sig = -code;
+  final name = signals[sig] ?? 'sinyal $sig';
+  return 'dibunuh $name${hints[sig] ?? ''}';
 }
 
 /// Configuration for one supervised start.
@@ -94,6 +128,10 @@ class BdsProcess {
   bool _escalatedKill = false;
   bool _startupFailed = false;
 
+  /// Ring of the most recent RAW lines (pre-parse), kept for exit detail.
+  final _rawTail = <String>[];
+  static const _maxTail = 40;
+
   BdsProcess(this.config);
 
   // ---------------------------------------------------------------- streams
@@ -147,14 +185,39 @@ class BdsProcess {
         environment: env,
       );
     } catch (e) {
+      // errno 13 = EACCES: the kernel refused to execute the binary at all.
+      // On Android this is the classic SELinux exec-from-app-storage denial
+      // (or an OEM hardening of it) — surface it as such instead of a bare
+      // 'spawn failed', which tells the user nothing actionable.
+      var hint = '';
+      if (e is ProcessException && (e.errorCode == 13 || e.errorCode == 8)) {
+        hint = ' (izin eksekusi ditolak oleh sistem — pembatasan Android/OEM pada penyimpanan aplikasi)';
+      } else if (e is ProcessException && e.errorCode == 2) {
+        hint = ' (berkas tidak ditemukan — pohon runtime rusak; coba pasang ulang dari APK)';
+      }
       _setState(BdsState.startupFailed);
-      _startupCompleter!.completeError(BdsStartupException('spawn failed: $e'));
-      _exitCompleter!.complete(BdsExit(-1, BdsExitKind.unknown, 'spawn failed: $e'));
-      rethrow;
+      // Uniform contract: start() failures surface as BdsStartupException
+      // (an earlier `rethrow` leaked the raw ProcessException instead —
+      // callers keyed on the wrapper missed the reason entirely). The
+      // startup completer is left uncompleted on purpose: nobody can await
+      // it anymore, and completing it with an error would surface as an
+      // unhandled async error on top of the thrown one.
+      final wrapped = BdsStartupException('spawn failed: $e$hint');
+      _lastExit = BdsExit(-1, BdsExitKind.unknown, 'spawn failed: $e$hint');
+      _exitCompleter!.complete(_lastExit!);
+      throw wrapped;
     }
 
-    _watchStdout(_process!.stdout);
-    _watchStdout(_process!.stderr);
+    // D-17 fix — drain BEFORE finalize. `exitCode` completes when the child
+    // is reaped, but the last stderr bytes can still be sitting in the pipe;
+    // closing the line stream at that moment silently discards the exact
+    // message that explains the death. Each watcher signals a Completer when
+    // its pipe reaches EOF; _superviseExit waits for BOTH (bounded) before
+    // classifying the exit.
+    final outDone = Completer<void>();
+    final errDone = Completer<void>();
+    _watchStdout(_process!.stdout, outDone);
+    _watchStdout(_process!.stderr, errDone);
 
     _startupWatchdog = Timer(config.startupTimeout, () {
       if (_state == BdsState.starting && !_startupCompleter!.isCompleted) {
@@ -168,7 +231,7 @@ class BdsProcess {
       }
     });
 
-    _process!.exitCode.then((code) => _onExit(code));
+    _superviseExit(outDone, errDone);
 
     // Wait for either startup success, startup failure, or early death.
     final earlyExit = _exitCompleter!.future.then((_) => true);
@@ -185,13 +248,41 @@ class BdsProcess {
     }
   }
 
-  void _watchStdout(Stream<List<int>> stream) {
+  /// Waits for process exit AND both pipes to reach EOF (bounded by a short
+  /// timeout in case an orphaned grandchild inherited the descriptors), then
+  /// finalizes. Order matters: classify first, publish last.
+  Future<void> _superviseExit(
+      Completer<void> outDone, Completer<void> errDone) async {
+    final code = await _process!.exitCode;
+    // Bounded drain: normally EOF arrives immediately after exit; if an
+    // orphan holds the pipe open, do not stall the crash state forever.
+    await Future.any([
+      Future.wait([outDone.future, errDone.future]),
+      Future<void>.delayed(const Duration(seconds: 5)),
+    ]);
+    _onExit(code);
+  }
+
+  void _watchStdout(Stream<List<int>> stream, Completer<void> done) {
     stream
         .transform(const LineStreamSplitter())
-        .listen((line) => _onLine(line), onDone: () {}, onError: (Object e) {
-      // A dead pipe is expected during shutdown; ignore.
+        .listen((line) {
+      _rawTail.add(line);
+      if (_rawTail.length > _maxTail) {
+        _rawTail.removeRange(0, _rawTail.length - _maxTail);
+      }
+      _onLine(line);
+    }, onDone: () {
+      if (!done.isCompleted) done.complete();
+    }, onError: (Object e) {
+      // A dead pipe is expected during shutdown; ignore — but still mark
+      // EOF so the exit supervisor is never stuck waiting on this pipe.
+      if (!done.isCompleted) done.complete();
     });
   }
+
+  /// The raw tail as plain text (for BdsExit and the diagnostics UI).
+  String get rawTailText => _rawTail.join('\n');
 
   void _onLine(String line) {
     final parsed = _parser.feed(line);
@@ -279,7 +370,12 @@ class BdsProcess {
     }
 
     final kind = _classifyExit(code);
-    _lastExit = BdsExit(code, kind, 'pid ${_process?.pid}');
+    _lastExit = BdsExit(
+      code,
+      kind,
+      'pid ${_process?.pid} · ${describeExitCode(code)}',
+      outputTail: rawTailText,
+    );
     if (_startupFailed) {
       _setState(BdsState.startupFailed);
     } else {

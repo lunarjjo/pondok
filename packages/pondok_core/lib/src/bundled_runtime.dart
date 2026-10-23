@@ -94,6 +94,23 @@ class BundledRuntimePaths {
   String get bedrockServer => '$server/bedrock_server';
   String get installedMarker => '$baseDir/installed.json';
   String get staging => '$baseDir/.staging';
+
+  /// The rootfs's own arm64 dynamic loader — the entry point of the DIRECT
+  /// (proot-less) launch mode. Ubuntu 24.04 arm64 keeps it under
+  /// /lib (→ usr/lib via merged-usr symlink); both candidates are checked
+  /// at runtime because only the extracted tree knows which materialized.
+  List<String> get loaderCandidates => [
+        '$rootfs/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1',
+        '$rootfs/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1',
+      ];
+}
+
+/// First existing loader candidate, or null when the tree is broken.
+Future<String?> resolveRootfsLoader(String baseDir) async {
+  for (final c in BundledRuntimePaths(baseDir).loaderCandidates) {
+    if (await File(c).exists()) return c;
+  }
+  return null;
 }
 
 /// Install / verify / repair the bundled runtime.
@@ -437,6 +454,52 @@ BdsProcessConfig bundledRuntimeProfile(
     // First boot pays box64 JIT warmup under proot — budget generously.
     startupTimeout: startupTimeout ?? const Duration(minutes: 15),
     gracefulStopTimeout: gracefulStopTimeout ?? const Duration(seconds: 120),
+    sigtermTimeout: const Duration(seconds: 20),
+  );
+}
+
+/// FALLBACK launch mode (D-17): run box64 WITHOUT proot by executing the
+/// rootfs's own dynamic loader directly — the same trick CI's
+/// stack_supervisor.py mode "direct-ld" proves on real arm64 hardware.
+/// This bypasses ptrace entirely, so it works on devices whose kernels or
+/// OEM policies break proot, while keeping every library inside the
+/// app-private tree (nothing touches the Android host's bionic).
+///
+///     <rootfs>/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1 \
+///         --library-path <rootfs arm64 libs>:<x86 bundle>:<server> \
+///         <rootfs>/opt/box64/box64 ./bedrock_server
+BdsProcessConfig directRuntimeProfile(
+  String baseDir, {
+  String? loader,
+  Duration? startupTimeout,
+  Duration? gracefulStopTimeout,
+}) {
+  final p = BundledRuntimePaths(baseDir);
+  final ld = loader ?? p.loaderCandidates.first;
+  final armLibs = [
+    '${p.rootfs}/usr/lib/aarch64-linux-gnu',
+    '${p.rootfs}/lib/aarch64-linux-gnu',
+  ];
+  final x86Bundle = '${p.rootfs}/usr/lib/box64-x86_64-linux-gnu';
+  final libs = [...armLibs, x86Bundle, p.server].join(':');
+  return BdsProcessConfig(
+    binary: ld,
+    args: [
+      '--library-path',
+      libs,
+      p.box64,
+      './bedrock_server',
+    ],
+    workingDir: p.server,
+    environment: {
+      'LD_LIBRARY_PATH': libs,
+      'BOX64_LD_LIBRARY_PATH': [x86Bundle, p.server].join(':'),
+      'TERM': 'dumb',
+      'HOME': p.baseDir,
+    },
+    // Without the proot tax, startup is several times faster.
+    startupTimeout: startupTimeout ?? const Duration(minutes: 8),
+    gracefulStopTimeout: gracefulStopTimeout ?? const Duration(seconds: 90),
     sigtermTimeout: const Duration(seconds: 20),
   );
 }

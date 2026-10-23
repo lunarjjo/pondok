@@ -31,11 +31,12 @@ managed Minecraft Bedrock Dedicated Server (BDS) host.
 | Area | Status |
 |---|---|
 | Phase 0 research + PoC against the real BDS binary | ✅ done — [docs/PHASE0_REPORT.md](docs/PHASE0_REPORT.md) |
-| `pondok_core` pure-Dart management engine | ✅ 119 unit tests green |
+| `pondok_core` pure-Dart management engine | ✅ 154 unit tests green |
 | Real-binary integration suite (start/console/allowlist/stop/persist/port/crash/watchdog) | ✅ 6/6 green in CI |
 | **Fully-bundled zero-setup runtime (ADR-004)** — proot + box64 + official BDS *inside the APK* | ✅ pack builder + installer + first-launch flow |
-| **Full translated stack verified on REAL arm64 hardware in CI** (boot → RakNet pong → console → exit 0 → world persistence) | ✅ `runtime-pack` workflow gates every APK |
-| On-device smoke test on a physical phone | ⏳ open DoD item (needs hardware) |
+| **Full translated stack verified on REAL arm64 hardware in CI** (boot → RakNet pong → console → exit 0 → world persistence) — proot, **direct-ld fallback**, and diagnostic direct modes | ✅ `runtime-pack` workflow gates every APK |
+| **Self-explaining failures (ADR-005)** — drain-before-finalize, signal-decoded exits, on-device probe ladder, persistent log, one-tap bug report, DIRECT auto-fallback | ✅ added after the first on-device bug report (D-17) |
+| On-device smoke test on a physical phone | ⏳ open DoD item (#19) — first attempt on the owner's phone hit D-17; instrumented build 0.2.0 awaits retest |
 | Tunnel provider end-to-end (M5) | ⏳ planned — [docs/ROADMAP.md](docs/ROADMAP.md) |
 
 The integration suite in CI **actually downloads and runs the official

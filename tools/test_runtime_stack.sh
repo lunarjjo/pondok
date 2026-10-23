@@ -7,10 +7,14 @@
 #
 #   proot (static) → ubuntu rootfs → box64 (dynarec) → bedrock_server (x86_64)
 #
-# Two modes, sequential:
-#   1. "direct" — box64 + bedrock_server straight on the host (diagnostic;
-#      isolates the emulation layer). Non-blocking for the verdict.
-#   2. "proot"  — the exact shipped launch path. MUST pass.
+# Three modes, sequential:
+#   1. "direct"    — box64 + bedrock_server straight on the host (diagnostic;
+#                    isolates the emulation layer). Non-blocking for the verdict.
+#   2. "direct-ld" — the app's DIRECT FALLBACK profile: rootfs ld.so entry,
+#                    --library-path inside the extracted tree, NO host glibc,
+#                    no proot. MUST pass — phones whose kernels/OEMs break
+#                    proot will auto-fall back to exactly this command line.
+#   3. "proot"     — the exact shipped launch path. MUST pass.
 #
 # Usage: tools/test_runtime_stack.sh <pack_dir>   (arm64 host required)
 # ==========================================================================
@@ -89,9 +93,14 @@ echo "######## MODE 1: direct (box64 without proot — diagnostic) ########"
 python3 "$HERE/stack_supervisor.py" "$STAGE" direct \
   || echo "!! direct mode reported issues — diagnostic only, NOT gating"
 
-# --- mode 2: proot (the shipped path — MUST pass) --------------------------
+# --- mode 2: direct-ld (the app's auto-fallback profile — MUST pass) ------
 echo
-echo "######## MODE 2: proot (the shipped stack — gating) ########"
+echo "######## MODE 2: direct-ld (app fallback profile — gating) ########"
+python3 "$HERE/stack_supervisor.py" "$STAGE" direct-ld
+
+# --- mode 3: proot (the shipped path — MUST pass) --------------------------
+echo
+echo "######## MODE 3: proot (the shipped stack — gating) ########"
 python3 "$HERE/stack_supervisor.py" "$STAGE" proot
 
 echo

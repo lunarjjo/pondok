@@ -8,11 +8,14 @@ same translated bedrock_server binary — driven through the exact launch
 command the app uses.
 
 Modes:
-  direct — box64 ./bedrock_server straight on the host
-           (diagnostic core check: emulation layer alone)
-  proot  — the EXACT stack the APK ships:
-           proot -R rootfs -b server:/srv/server
-                  sh -c "LD_LIBRARY_PATH=. /opt/box64/box64 ./bedrock_server"
+  direct    — box64 ./bedrock_server straight on the host
+              (diagnostic core check: emulation layer alone)
+  direct-ld — box64 launched through the ROOTFS's own ld.so with
+              --library-path — the app's DIRECT fallback profile, no
+              host glibc, no proot: device-equivalent isolation
+  proot     — the EXACT stack the APK ships:
+              proot -R rootfs -b server:/srv/server
+                     sh -c "LD_LIBRARY_PATH=. /opt/box64/box64 ./bedrock_server"
 
 Checks per mode (two server cycles each):
   1. startup     — "Server started." observed within budget (box64 JIT
@@ -59,6 +62,28 @@ class Server:
             )
             self.env = {**os.environ, "LD_LIBRARY_PATH": libs,
                         "BOX64_LD_LIBRARY_PATH": libs}
+        elif mode == "direct-ld":
+            # Mirrors pondok_core.directRuntimeProfile() — the app's
+            # fallback when a device breaks proot: rootfs ld.so entry,
+            # every library resolved INSIDE the extracted tree (host
+            # glibc/bionic never touched, exactly like on the phone).
+            loader = os.path.join(
+                rootfs, "lib", "aarch64-linux-gnu", "ld-linux-aarch64.so.1")
+            arm_libs = [
+                os.path.join(rootfs, "usr/lib/aarch64-linux-gnu"),
+                os.path.join(rootfs, "lib/aarch64-linux-gnu"),
+            ]
+            libs = ":".join([*arm_libs,
+                             os.path.join(rootfs, "usr/lib/box64-x86_64-linux-gnu"),
+                             self.server_dir])
+            self.cmd = [loader, "--library-path", libs, box64, "./bedrock_server"]
+            self.cwd = self.server_dir
+            self.env = {**os.environ,
+                        "LD_LIBRARY_PATH": libs,
+                        "BOX64_LD_LIBRARY_PATH":
+                            os.path.join(rootfs, "usr/lib/box64-x86_64-linux-gnu")
+                            + ":" + self.server_dir,
+                        "HOME": stage}
         else:
             self.cmd = [
                 os.path.join(self.runtime_dir, "proot"),

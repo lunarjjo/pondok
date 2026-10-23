@@ -122,6 +122,91 @@ void main() {
     // still-pending install future's UI subscriptions.
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets(
+      'D-17: a failed start shows the reason, tries the fallback mode, '
+      'and runs diagnostics — never a silent crash badge', (tester) async {
+    final setup = await fakeSetup(tester);
+    var profileCalls = <String>[];
+    final server = ServerController(
+      baseDir: baseDir,
+      // Both profiles fail BEFORE any real process spawn (error injected
+      // at profile resolution) — keeps the test inside fake-async.
+      profileFactory: (base, mode) {
+        profileCalls.add(mode.name);
+        return Future<BdsProcessConfig>.error(
+            StateError('spawn failed: execvp(proot): Permission denied'));
+      },
+      diagnosticsFactory: (base) => _FakeDiagnostics(base),
+      deviceInfoReader: () async => const {
+        'model': 'Pixel Test',
+        'android': '15',
+        'abis': 'arm64-v8a',
+      },
+    );
+    await tester.runAsync(() => server.hydrate());
+
+    await tester.pumpWidget(
+      MaterialApp(home: HomeScreen(setupController: setup, serverController: server)),
+    );
+    await tester.runAsync(() => setup.ensureInstalled());
+    expect(setup.isReady, isTrue, reason: 'fixture must be healthy');
+
+    // Accept the EULA gate, then press Start.
+    await tester.tap(find.text('Saya setuju — lanjutkan'));
+    await _settle(tester);
+    await tester.tap(find.text('Start'));
+    await _settle(tester);
+
+    // Both launch modes were attempted — the automatic fallback ran.
+    expect(profileCalls, ['proot', 'direct']);
+
+    // The failure box replaced the silent badge: reason, ladder, log path.
+    expect(find.text('Mengapa gagal?'), findsOneWidget);
+    expect(find.textContaining('spawn failed: execvp(proot)'), findsOneWidget);
+    expect(find.textContaining('mode cadangan juga gagal'), findsOneWidget);
+    expect(find.text('Tangga diagnostik:'), findsOneWidget);
+    expect(find.text('Eksekusi proot dari penyimpanan aplikasi'),
+        findsOneWidget);
+    expect(find.textContaining('Izin eksekusi DITOLAK'),
+        findsWidgets); // in the summary AND the probe note
+    expect(find.textContaining('pondok.log'), findsOneWidget);
+
+    // The manual diagnostics button exists and is usable post-failure.
+    expect(find.text('Diagnostik'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+  });
+}
+
+class _FakeDiagnostics extends StackDiagnostics {
+  _FakeDiagnostics(super.base);
+
+  @override
+  Future<List<ProbeResult>> run({void Function(ProbeResult)? onProbe}) async {
+    const rs = [
+      ProbeResult(
+          name: 'sh',
+          label: 'Proses dasar sistem',
+          status: ProbeStatus.pass),
+      ProbeResult(
+          name: 'exec-proot',
+          label: 'Eksekusi proot dari penyimpanan aplikasi',
+          status: ProbeStatus.fail,
+          exitCode: 13,
+          note: 'Izin eksekusi DITOLAK — Android/OEM memblokir eksekusi '
+              'berkas dari penyimpanan aplikasi (SELinux).'),
+      ProbeResult(
+          name: 'direct-box64',
+          label: 'box64 langsung tanpa proot (mode cadangan)',
+          status: ProbeStatus.fail,
+          exitCode: 13),
+    ];
+    for (final r in rs) {
+      onProbe?.call(r);
+    }
+    return rs;
+  }
 }
 
 class _HangingPackSource implements PackSource {

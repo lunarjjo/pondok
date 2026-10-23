@@ -24,3 +24,5 @@ coverage/
 packages/pondok_dev/
 app/.flutter-plugins-dependencies
 app/android/app/src/main/java/
+app/.flutter-plugins
+.flutter-plugins-dependencies

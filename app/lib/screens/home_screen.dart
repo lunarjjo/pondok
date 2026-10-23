@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -46,6 +49,7 @@ class _HomeScreenState extends State<HomeScreen> {
       // Controller may already be ready (pre-warmed, or tests): skip the
       // redundant install check instead of re-running IO.
       if (!_setup!.isReady) await _setup!.ensureInstalled();
+      unawaited(_server!.hydrate());
       return;
     }
     // Production path: app-private files dir.
@@ -55,6 +59,7 @@ class _HomeScreenState extends State<HomeScreen> {
       RuntimeSetupController(baseDir: '$dir/pondok'),
       ServerController(baseDir: '$dir/pondok'),
     );
+    unawaited(_server!.hydrate());
     await _setup!.ensureInstalled();
   }
 
@@ -355,7 +360,27 @@ class _ServerCard extends StatelessWidget {
                 icon: const Icon(Icons.stop),
                 label: const Text('Stop'),
               ),
+              const SizedBox(width: 12),
+              OutlinedButton.icon(
+                onPressed: running || server.diagnosing
+                    ? null
+                    : () => server.runDiagnostics(),
+                icon: server.diagnosing
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.troubleshoot),
+                label: const Text('Diagnostik'),
+              ),
             ]),
+            if (server.state == BdsState.crashed ||
+                server.state == BdsState.startupFailed ||
+                (server.failure ?? '').isNotEmpty) ...[
+              const SizedBox(height: 12),
+              _FailureBox(server: server),
+            ],
             if (server.lastExit != null) ...[
               const SizedBox(height: 8),
               Text(
@@ -364,6 +389,139 @@ class _ServerCard extends StatelessWidget {
               ),
             ],
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------- failure
+
+/// The D-17 centerpiece: when the server dies, the screen shows the ACTUAL
+/// reason — exit code decoded (signal vs plain exit), the process's last
+/// output, the probe ladder verdict, and a one-tap copyable bug report.
+/// "Kehilangan proses (crash)" with zero explanation is what this replaces.
+class _FailureBox extends StatelessWidget {
+  final ServerController server;
+  const _FailureBox({required this.server});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    final diag = server.diagnostics;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: c.errorContainer.withAlpha(89),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: c.error.withAlpha(102)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+              Icon(Icons.report_outlined, color: c.error, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('Mengapa gagal?', style: t.titleSmall),
+              ),
+              IconButton.outlined(
+                tooltip: 'Salin laporan untuk dikirim ke pengembang',
+                onPressed: () => _copyReport(context),
+                icon: const Icon(Icons.copy, size: 18),
+              ),
+          ]),
+          if ((server.failure ?? '').isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              server.failure!,
+              style: t.bodySmall?.copyWith(
+                fontFamily: 'monospace',
+                color: c.onErrorContainer,
+              ),
+            ),
+          ],
+          if (diag != null && diag.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text('Tangga diagnostik:', style: t.titleSmall),
+            const SizedBox(height: 4),
+            for (final r in diag)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _ProbeBadge(r),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(r.label, style: t.bodySmall),
+                          if (r.note.isNotEmpty)
+                            Text(
+                              r.note,
+                              style: t.bodySmall
+                                  ?.copyWith(color: c.onSurfaceVariant),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+          const SizedBox(height: 4),
+          Text(
+            'Log lengkap: ${server.logPath}',
+            style: t.bodySmall?.copyWith(color: c.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _copyReport(BuildContext context) async {
+    final report = await server.buildBugReport();
+    await Clipboard.setData(ClipboardData(text: report));
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Laporan lengkap tersalin ke papan klip — '
+            'tempelkan (paste) ke pengembang.'),
+        duration: Duration(seconds: 3),
+      ),
+    );
+  }
+}
+
+class _ProbeBadge extends StatelessWidget {
+  final ProbeResult r;
+  const _ProbeBadge(this.r);
+
+  @override
+  Widget build(BuildContext context) {
+    final c = Theme.of(context).colorScheme;
+    final (fg, bg) = switch (r.status) {
+      ProbeStatus.pass => (c.onPrimaryContainer, c.primaryContainer),
+      ProbeStatus.skipped => (c.onSurfaceVariant, c.surfaceContainerHighest),
+      _ => (c.onErrorContainer, c.errorContainer),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        '${r.statusLabel}${r.exitCode != null && r.status != ProbeStatus.pass ? ' ${r.exitCode}' : ''}',
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          color: fg,
         ),
       ),
     );
