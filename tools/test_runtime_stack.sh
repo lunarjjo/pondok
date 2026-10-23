@@ -62,6 +62,17 @@ chmod +x "$STAGE/server/bedrock_server"
 sed -i 's/^transport=nethernet/transport=raknet/' "$STAGE/server/server.properties"
 echo "managed properties: $(grep '^transport=' "$STAGE/server/server.properties")"
 
+# Diagnostics: prove DNS + resolution work INSIDE the proot rootfs on this
+# host before blaming the server. The 'Minecraft services' check failing
+# under proot while succeeding in direct mode points here.
+echo "== proot environment diagnostics =="
+"$STAGE/runtime/proot" -R "$STAGE/runtime/rootfs" /bin/sh -c '
+  echo "-- resolv.conf:"; cat /etc/resolv.conf 2>&1
+  echo "-- gai.conf (precedence):"; grep -v "^#" /etc/gai.conf 2>/dev/null | head -5 || echo "(default RFC3484)"
+  echo "-- resolve www.minecraft.net:"; getent hosts www.minecraft.net 2>&1 | head -2 || echo "getent FAILED"
+  echo "-- resolve login.live.com:"; getent hosts login.live.com 2>&1 | head -2 || echo "getent FAILED"
+' || echo "!! proot diagnostics themselves failed rc=$?"
+
 echo "== layout =="
 ls "$STAGE/runtime/rootfs/opt/box64/"
 ls "$STAGE/server/" | head -8

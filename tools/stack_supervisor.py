@@ -129,6 +129,37 @@ def raknet_ping(timeout=3.0):
     return data[35:35 + slen].decode("utf-8", "replace")
 
 
+def host_lan_ip():
+    """The address a LAN client would actually ping."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
+
+
+def udp_loopback_sanity(payload_size=200):
+    """Distinguish 'host drops loopback UDP' from 'server never replies'."""
+    rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    rx.bind(("127.0.0.1", 0))
+    rx.settimeout(2)
+    addr = rx.getsockname()
+    tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    payload = b"x" * payload_size
+    try:
+        tx.sendto(payload, addr)
+        data, _ = rx.recvfrom(4096)
+        return len(data) == payload_size
+    except OSError:
+        return False
+    finally:
+        rx.close()
+        tx.close()
+
+
 def wait_pong(budget):
     t0 = time.time()
     while time.time() - t0 < budget:
@@ -157,7 +188,7 @@ def run_cycle(stage, mode, label):
         return False
     pong = wait_pong(90)
     oks.append(check(f"[{label}] protocol: RakNet ping -> pong", pong is not None,
-                     pong[1] if pong else "no pong within 90s"))
+                     pong[1] if pong else "no pong within 90s (loopback sanity above tells whether the host is the suspect)"))
     srv.command("list")
     oks.append(check(f"[{label}] console: 'list' -> players line",
                      srv.wait_for("players online", 60) is not None))
@@ -168,6 +199,12 @@ def run_cycle(stage, mode, label):
 
 def main():
     stage, mode = sys.argv[1], sys.argv[2]
+    check("[host] UDP loopback sanity (200-byte datagram)", udp_loopback_sanity(),
+          "host loopback UDP works" if udp_loopback_sanity()
+          else "host drops/blocks loopback UDP — pong failures may be the HOST, not the server")
+    lan = host_lan_ip()
+    if lan:
+        print(f"  host LAN IP: {lan}", flush=True)
     ok1 = run_cycle(stage, mode, f"{mode} cycle #1 (fresh world)")
 
     worlds = os.path.join(stage, "server", "worlds")
