@@ -53,8 +53,12 @@ s apt-get install -y -qq build-essential pkg-config libtalloc-dev >/dev/null
 s apt-get install -y -qq uthash-dev >/dev/null 2>&1 || log "  uthash-dev n/a — relying on git submodule"
 git clone --quiet --depth 1 --recurse-submodules --branch "$PROOT_TAG" \
   https://github.com/proot-me/proot "$WORK/proot-src"
-if ! make -C "$WORK/proot-src/src" -j"$(nproc)" GIT=false WITHOUT_PYTHON=1 \
-     LDFLAGS=-static >"$WORK/proot.log" 2>&1; then
+# LDFLAGS must enter via the ENVIRONMENT: as a make command-line variable
+# it would override the GNUmakefile's own `LDFLAGS += $(talloc libs)` and
+# the link would miss libtalloc entirely (learned the hard way — CI cycle
+# 2 of this workflow).
+if ! LDFLAGS=-static make -C "$WORK/proot-src/src" -j"$(nproc)" \
+     GIT=false WITHOUT_PYTHON=1 >"$WORK/proot.log" 2>&1; then
   tail -40 "$WORK/proot.log"; echo "FATAL: proot build failed" >&2; exit 1
 fi
 PROOT_BIN="$WORK/proot-src/src/proot"

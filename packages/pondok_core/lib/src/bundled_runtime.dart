@@ -196,9 +196,24 @@ class BundledRuntime {
 
   /// Swap staged trees into place. Never leaves the app without a marker:
   /// the marker is written last; any earlier crash simply restarts install.
+  ///
+  /// Player data survives repairs:
+  /// * worlds/ is MOVED aside (rename — O(1) even for gigabytes) to
+  ///   `<baseDir>/.worlds.keep` and moved back after the swap. The keep dir
+  ///   lives OUTSIDE .staging so a failed install can never delete it, and
+  ///   a crashed repair leaves it behind for the next one to restore.
+  /// * small config files (server.properties, allowlist, ops, permissions)
+  ///   are snapshotted as bytes and rewritten after the swap.
   Future<void> _activate(
       String newRuntime, String newServer, RuntimePackManifest manifest) async {
-    // Preserve player data from the existing server instance.
+    final keep = Directory('${paths.baseDir}/.worlds.keep');
+    final worlds = Directory('${paths.server}/worlds');
+    var worldsPreserved = false;
+    if (await worlds.exists() && !await keep.exists()) {
+      await worlds.rename(keep.path);
+      worldsPreserved = true;
+    }
+
     Map<String, List<int>>? preserved;
     if (await Directory(paths.server).exists()) {
       preserved = {};
@@ -210,28 +225,41 @@ class BundledRuntime {
       }
     }
 
-    await _replaceDir(newRuntime, paths.runtime);
-    await _replaceDir(newServer, paths.server);
+    try {
+      await _replaceDir(newRuntime, paths.runtime);
+      await _replaceDir(newServer, paths.server);
 
-    if (preserved != null) {
-      for (final e in preserved.entries) {
-        await File('${paths.server}/${e.key}').writeAsBytes(e.value, flush: true);
+      if (preserved != null) {
+        for (final e in preserved.entries) {
+          await File('${paths.server}/${e.key}').writeAsBytes(e.value, flush: true);
+        }
       }
-    }
+      if (worldsPreserved || await keep.exists()) {
+        await Directory(paths.server).create(recursive: true);
+        await keep.rename('${paths.server}/worlds');
+      }
 
-    await File(paths.installedMarker).writeAsString(
-      jsonEncode({
-        'installedAt': DateTime.now().toIso8601String(),
-        'manifest': {
-          'format': manifest.format,
-          'packVersion': manifest.packVersion,
-          'createdAt': manifest.createdAt,
-          'components': manifest.components,
-          'members': manifest.members,
-        },
-      }),
-      flush: true,
-    );
+      await File(paths.installedMarker).writeAsString(
+        jsonEncode({
+          'installedAt': DateTime.now().toIso8601String(),
+          'manifest': {
+            'format': manifest.format,
+            'packVersion': manifest.packVersion,
+            'createdAt': manifest.createdAt,
+            'components': manifest.components,
+            'members': manifest.members,
+          },
+        }),
+        flush: true,
+      );
+    } catch (_) {
+      // Put the worlds back where they were if the swap did not complete.
+      if (worldsPreserved && await keep.exists() && !await worlds.exists()) {
+        await Directory(paths.server).create(recursive: true);
+        await keep.rename(worlds.path);
+      }
+      rethrow;
+    }
   }
 
   Future<void> _replaceDir(String from, String to) async {
