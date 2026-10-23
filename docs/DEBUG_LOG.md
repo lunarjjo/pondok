@@ -188,3 +188,13 @@ bug report in the UI, DIRECT fallback profile, `direct-ld` CI gating.
 phone) remains UNKNOWN — the sandbox has no Android hardware. The new
 build either runs (DIRECT fallback), or prints exactly which layer died
 with what evidence (#19 remains open until the owner runs it).
+
+### D-18 · `android.os.SELinux` is not in the public SDK
+**Where:** `MainActivity.kt` · **Severity:** CI-only compile failure
+(`Unresolved reference 'SELinux'` — local `flutter analyze` cannot see
+Kotlin, so nothing caught it before the runner). Despite being documented
+in some places, `android.os.SELinux` is a hidden/SystemApi surface. Same
+treatment as `Os.sysconf`: reflection inside try/catch — diagnostics must
+compile on every SDK level and degrade to `"unknown"`, never break the
+build. Lesson re-confirmed: Kotlin changes are only proven by the CI
+build, so keep platform-facing Kotlin minimal and reflective.

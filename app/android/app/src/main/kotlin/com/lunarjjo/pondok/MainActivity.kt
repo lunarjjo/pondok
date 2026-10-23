@@ -4,7 +4,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.SELinux
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -49,9 +48,10 @@ class MainActivity : FlutterActivity() {
                     }
                     "deviceInfo" -> {
                         // Diagnostics context (D-17): model/ABI/SELinux state
-                        // decorate every bug report. Page size goes through
-                        // reflection so the build never depends on an
-                        // android.system API level.
+                        // decorate every bug report. android.os.SELinux and
+                        // android.system.Os.sysconf are NOT public SDK APIs,
+                        // so both go through reflection — the build must
+                        // never depend on a hidden API level.
                         val info = mutableMapOf<String, String>()
                         info["model"] = Build.MODEL ?: "?"
                         info["manufacturer"] = Build.MANUFACTURER ?: "?"
@@ -68,7 +68,9 @@ class MainActivity : FlutterActivity() {
                             "unknown"
                         }
                         info["selinuxEnforcing"] = try {
-                            SELinux.isSELinuxEnforced().toString()
+                            Class.forName("android.os.SELinux")
+                                .getMethod("isSELinuxEnforced")
+                                .invoke(null).toString()
                         } catch (t: Throwable) {
                             "unknown"
                         }
