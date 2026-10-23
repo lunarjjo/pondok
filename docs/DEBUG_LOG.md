@@ -78,3 +78,74 @@ compile/test; kept here as a note to prefer the Edit tool for code changes.
 **Resulting state:** 103 unit tests green · 6/6 real-BDS integration tests
 green (start, console round-trip, allowlist sync, graceful stop exit 0,
 world persistence, port change, crash classification, watchdog).
+
+---
+
+## Session 2 (2026-10-23) — M2 bundled-runtime pivot
+
+### D-08 · `make LDFLAGS=-static` silently strips the Makefile's own link flags
+**Where:** `tools/build_runtime_pack.sh` · **Severity:** CI-blocking (2 cycles).
+proot's static link failed with `undefined reference to talloc_*` — but
+`-ltalloc` was never missing: a make **command-line** variable overrides
+EVERY assignment in the makefile, including `LDFLAGS += $(pkg-config --libs
+talloc)`. proot's own CI passes LDFLAGS via the ENVIRONMENT
+(`LDFLAGS="…" make …`) for exactly this reason. One-character-class fix:
+`LDFLAGS=-static make …` instead of `make … LDFLAGS=-static`.
+
+### D-09 · proot embeds Python when python3-config is visible
+**Where:** same · **Severity:** CI-blocking (cycle 1).
+`undefined reference to PyExc_TypeError` — ubuntu-24.04-arm runners ship
+python3-dev, which flips proot's GNUmakefile into building its Python
+extension, and glibc-static-libpython does not resolve its own symbols
+under -static (documented in a comment in proot's own GNUmakefile).
+Fix: `WITHOUT_PYTHON=1` — upstream's own switch for "don't want it".
+
+### D-10 · Phase-0 assumption "all BDS deps are Box64-wrapped" was WRONG
+**Where:** whole runtime design · **Severity:** would have shipped dead.
+On real arm64 hardware box64 exits 255 with `Error: Loading needed libs in
+elf ./bedrock_server` — bedrock_server needs REAL x86-64 libstdc++/libgcc
+that box64 does not wrap. Fix: box64's official
+`box64-bundle-x86-libs` (34 MB, sha-pinned) inside the rootfs +
+`LD_LIBRARY_PATH=.:/usr/lib/box64-x86_64-linux-gnu`. Lesson: a dependency
+list read off `ldd` on x86-64 is NOT evidence about what the translator
+needs at load time — only a real boot is.
+
+### D-11 · Dart has no `0o` octal literals
+**Where:** `tar.dart` + tests · **Severity:** compile-blocking.
+`0o644` parses as `0` followed by identifier `o644` → cascading weird
+errors. All modes are hex now (`0x1A4` = 0644, `0x1ED` = 0755).
+
+### D-12 · `BundledRuntimePaths.box64` pointed at `$runtime/opt/...` not `$rootfs/opt/...`
+**Where:** `bundled_runtime.dart` · **Severity:** caught by unit test.
+The installer laid the tree down correctly; only the PATH CONSTANT was
+wrong — verify() reported "box64 missing" while the file sat one level
+deeper. Path constants deserve their own test the moment they are written.
+
+### D-13 · installedManifest() parsed the marker WRAPPER, not the inner manifest
+**Where:** same file · **Severity:** silent "not installed" → needless
+reinstalls. The marker is `{"installedAt":…, "manifest":{…}}`; parse()
+expected the manifest at top level. Found by scratch-debugging (printed
+marker, tried parse, read the FormatException).
+
+### D-14 · tar entries named `./usr/bin/...` leaked "./" into paths
+**Where:** `tar.dart` · **Severity:** assertion mismatches vs system tar.
+`tar -C dir .` prefixes every entry with `./` — execPaths and comparisons
+must normalize. Also: `Uint8List.indexOf` searches for a single int
+ELEMENT (no sub-array search exists) — the tamper test needed its own
+`_indexOfSub`.
+
+### D-15 · fake-async hang, rediscovered + a second layer
+**Where:** `app/test/widget_test.dart` · **Severity:** test hang (~87 s).
+Layer 1 (known from M1): awaiting real IO (sha256OfFile!) in the
+testWidgets body never completes — fixture prep must run inside
+`tester.runAsync`. Layer 2 (new): an indeterminate spinner's animation
+ticker outliving the test → "(did not complete)" — dispose the tree with
+`pumpWidget(const SizedBox())` at the end. Also: `find.textContaining` is
+case-sensitive ("Sekali saja" vs "sekali saja").
+
+### D-16 · asset name prefix confusion
+**Where:** `pack_source.dart` · **Severity:** fallback path broken in tests.
+The Android AssetManager needs `flutter_assets/<name>`; rootBundle needs
+the plain pubspec name. Mapping belonged in ONE place (PackSource), not
+at call sites — the controller was passing the prefixed form and the
+test fallback could never load it.

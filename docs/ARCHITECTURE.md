@@ -54,28 +54,42 @@ Design principles:
 4. **Local administration only.** No administrative listener is ever exposed through the
    tunnel. The game tunnel forwards exactly one UDP port to the server process.
 
-## 2. Runtime profiles
+## 2. Runtime profile (fully-bundled, ADR-004)
 
-The single most important abstraction. A `RuntimeProfile` prepares an execution
-environment and returns the exact argv + environment to run `bedrock_server`.
+One profile, shipped entirely inside the APK (assets/runtime_pack.zip):
+proot (static, arm64) → ubuntu-base arm64 rootfs → box64 (ARM_DYNAREC)
+→ bedrock_server (x86-64) + box64's official x86-64 lib bundle. There is
+no runtime selection, no download, no setup: first launch unpacks, every
+launch after that starts the server directly.
 
-| | **Lean** (default target) | **Proot** (fallback) |
-|---|---|---|
-| Components | `box64` (arm64, bundled as jniLib) | `box64` + `proot` (bundled) + Debian arm64 minimal rootfs (~80 MB, downloaded at setup) |
-| argv | `box64 <instance>/bedrock_server` | `proot -R <rootfs> -b <instance>:/server box64 /server/bedrock_server` |
-| Why it can work | BDS deps are all Box64-wrapped libs (verified dependency list, Phase 0 §2) | Exact community-proven stack (BedrockServerTermux) |
-| Risk | Least-tested configuration on real devices | Heavier; slower startup; larger storage |
-| Selection | Onboarding runs a **runtime diagnostic** (exec `box64 --version`, then a BDS smoke-start in staging); auto-falls back to proot on failure | |
+Launch line (mirrored EXACTLY by `bundledRuntimeProfile()` and
+`tools/stack_supervisor.py` — the CI test and the device run the same
+command):
 
-Bundling rule: `box64`/`proot` are GPL/LGPL open-source binaries shipped inside the APK
-`lib/arm64-v8a/` as `libpondok_box64.so` / `libpondok_proot.so` (exec from
-`nativeLibraryDir` is allowed on all Android versions and SELinux domains). The Debian
-rootfs and BDS zip are **downloaded during setup** — never bundled.
+```
+<files>/runtime/proot -R <files>/runtime/rootfs \
+                       -b <files>/server:/srv/server \
+                       -w /srv/server \
+  /bin/sh -c "mkdir -p /tmp 2>/dev/null; \
+              export HOME=/tmp PATH=/usr/bin:/bin \
+                     LD_LIBRARY_PATH=.:/usr/lib/box64-x86_64-linux-gnu; \
+              exec /opt/box64/box64 ./bedrock_server"
+```
 
-**targetSdk 28 rationale** (sideload-only app): executing *downloaded* binaries (BDS after
-updates, playit agent) from app-private storage requires the legacy SELinux domain that
-targetSdk 28 apps run in — the same approach Termux uses today. The trade-offs and the
-alternative (Termux integration) are recorded in `RISK_REGISTER.md` R-01.
+* `.` in LD_LIBRARY_PATH carries bedrock's own bundled x86-64 libs; the
+  box64-x86_64-linux-gnu path carries the un-wrapped ones (libstdc++,
+  libgcc_s, …) — without them box64 dies with
+  `Error: Loading needed libs in elf ./bedrock_server` (exit 255; found
+  the hard way in CI, see DEBUG_LOG.md).
+* Storage: ~700 MB extracted from the ~170 MB pack; internal
+  app-support storage; symlink creation allowed in the app-private dir
+  (the tar extractor materializes rootfs symlinks directly).
+
+**targetSdk 28 rationale** (sideload-only app, ADR-001): executing
+binaries that live in app-private storage requires the legacy SELinux
+domain that targetSdk-28 apps run in — the same approach Termux uses.
+The escape hatch (a Termux-integration RuntimeProfile) stays documented
+in RISK_REGISTER.md R-01.
 
 ## 3. Instance model & storage layout
 

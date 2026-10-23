@@ -36,15 +36,24 @@ The process-management layer, proven against the real BDS binary on every push.
 - **Acceptance:** green CI run containing a real BDS log excerpt as test output; APK
   artifact attached; zero analyzer issues.
 
-## M2 — Onboarding & runtime bring-up (Phase 1 on device)
+## M2 — Fully-bundled zero-setup runtime (Phase 1, ADR-004) ← current
 
-- [ ] Bundled box64/proot (jniLibs) with pinned builds + THIRD_PARTY_NOTICES
-- [ ] Onboarding: storage check, RAM check, runtime profile diagnostic (real smoke-start
-      in staging; auto-fallback lean→proot), BDS download + EULA step, first instance
-- [ ] Foreground service + persistent notification + wake lock (Kotlin), app-death
-      detection with honest messaging
-- **Acceptance (on-device, issue-tracked with log evidence):** server reaches
-  "Server started." on a physical ARM64 phone through the lean or proot profile.
+Owner pivot (2026-10-23): no setup steps, no downloads — everything ships
+inside the APK ("user tinggal pakai").
+
+- [x] Runtime pack builder (CI, arm64 runner): proot static + ubuntu-base
+      rootfs + box64 dynarec + official BDS — pinned, hashed, manifest'd.
+- [x] Full-stack verification on REAL arm64 hardware: boot, RakNet ping →
+      pong, console round-trip, stop exit 0, world persistence across
+      restart (workflow `runtime-pack`, gating for every APK).
+- [x] pondok_core: streaming tar reader + BundledRuntime installer
+      (staging → sha-gate → activate; self-heal preserves worlds/ +
+      server.properties/allowlist) — 119 unit tests green.
+- [x] App: zero-setup first-launch flow (runtime card + EULA gate +
+      Start/Stop + live console), streaming asset copy via Kotlin channel.
+- [ ] CI green end-to-end with the pack embedded in the APK (in progress).
+- [ ] On-device smoke test on a real phone (needs hardware — offer to
+      owner; also the playit tunnel E2E DoD item).
 
 ## M3 — Management features (Phases 2+3)
 
