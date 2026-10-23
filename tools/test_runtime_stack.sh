@@ -52,6 +52,16 @@ unzip -q "$STAGE/pack/bds.zip" -d "$STAGE/server"
 install -m 0755 "$STAGE/pack/proot" "$STAGE/runtime/proot"
 chmod +x "$STAGE/server/bedrock_server"
 
+# Product-managed default, applied identically by the app installer:
+# classic RakNet transport. The 1.26.x default (nethernet) is
+# signaling-service based — it never answers LAN-style unconnected pings
+# and its Minecraft-services dependency can kill the server at boot when
+# DNS is unreachable. Verified locally against the real binary: with
+# transport=raknet the unconnected ping is answered (0x1c pong, full
+# MCPE server string).
+sed -i 's/^transport=nethernet/transport=raknet/' "$STAGE/server/server.properties"
+echo "managed properties: $(grep '^transport=' "$STAGE/server/server.properties")"
+
 echo "== layout =="
 ls "$STAGE/runtime/rootfs/opt/box64/"
 ls "$STAGE/server/" | head -8

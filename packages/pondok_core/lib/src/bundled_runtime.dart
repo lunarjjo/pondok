@@ -177,6 +177,7 @@ class BundledRuntime {
       if (!await File('$newServer/bedrock_server').exists()) {
         throw StateError('bds.zip has no bedrock_server');
       }
+      await _ensureManagedProperties(newServer);
 
       // Exec bits (dart:io cannot chmod): batched platform chmod.
       onProgress?.call(RuntimeInstallPhase.permissions, 0);
@@ -241,6 +242,9 @@ class BundledRuntime {
         for (final e in preserved.entries) {
           await File('${paths.server}/${e.key}').writeAsBytes(e.value, flush: true);
         }
+        // A preserved properties file may predate the managed-transport
+        // policy (or have dropped the line) — normalize before activation.
+        await _ensureManagedProperties(paths.server);
       }
       if (worldsPreserved || await keep.exists()) {
         await Directory(paths.server).create(recursive: true);
@@ -279,6 +283,35 @@ class BundledRuntime {
     final old = Directory('$to.old');
     if (await old.exists()) {
       await old.delete(recursive: true);
+    }
+  }
+
+  /// Product-managed defaults on the ACTIVE server.properties.
+  ///
+  /// `transport=raknet` is required: the 1.26.x default (nethernet) is
+  /// signaling-service based — it never answers LAN-style unconnected
+  /// pings (verified against the real binary) and its Minecraft-services
+  /// dependency kills the server at boot when DNS is unreachable.
+  ///
+  /// This key is OWNED by pondok (the whole product — LAN join, RakNet
+  /// health check, playit tunneling — needs it): every existing
+  /// transport line is normalized and a missing one is appended, both
+  /// after fresh extraction and after repair-time restore.
+  Future<void> _ensureManagedProperties(String serverDir) async {
+    final f = File('$serverDir/server.properties');
+    if (!await f.exists()) return;
+    final text = await f.readAsString();
+    var managed = text;
+    final re = RegExp(r'^transport=.*$', multiLine: true);
+    if (re.hasMatch(managed)) {
+      managed = managed.replaceAllMapped(re, (_) => 'transport=raknet');
+    } else {
+      managed = managed.isEmpty || managed.endsWith('\n')
+          ? '${managed}transport=raknet\n'
+          : '$managed\ntransport=raknet\n';
+    }
+    if (managed != text) {
+      await f.writeAsString(managed, flush: true);
     }
   }
 

@@ -102,6 +102,13 @@ tar -xzf "$WORK/$UB_NAME" -C "$WORK/rootfs"
 mkdir -p "$WORK/rootfs/opt/box64"
 install -m 0755 "$BOX64_BIN" "$WORK/rootfs/opt/box64/box64"
 
+# Static DNS inside the rootfs. ubuntu-base ships a DANGLING resolv.conf
+# symlink (systemd-resolved) — inside proot, name resolution then fails,
+# online-mode's Minecraft-services check errors out after 60 s and the
+# server STOPS ITSELF before ever printing "Server started." (CI cycle 5).
+rm -f "$WORK/rootfs/etc/resolv.conf"
+printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > "$WORK/rootfs/etc/resolv.conf"
+
 log "[3b] box64 x86_64 libs bundle (the un-wrapped libs bedrock_server needs)"
 curl -fsSL -o "$WORK/x86libs.tar.gz" "$X86LIBS_URL"
 echo "$X86LIBS_SHA256  $WORK/x86libs.tar.gz" | sha256sum -c - >/dev/null \

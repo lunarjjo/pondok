@@ -46,11 +46,15 @@ void main() {
     await File('$src/rootfs.tar').writeAsBytes(tb.finish());
 
     // bds.zip: fake-but-plausibly-sized bedrock_server + default configs.
+    // The transport default mirrors the REAL distribution (nethernet) —
+    // the installer must rewrite it (product-managed raknet).
     final bdsZip = ZipWriter('$src/bds.zip');
     final serverBytes = Uint8List(1024 * 1024 + 7)..fillRange(0, 30, 0x7F);
     bdsZip.addFile('bedrock_server', serverBytes);
     bdsZip.addFile(
-        'server.properties', utf8.encode('motd=Pondok test\nserver-port=19132\n'));
+        'server.properties',
+        utf8.encode('motd=Pondok test\nserver-port=19132\n'
+            'transport=nethernet\n'));
     bdsZip.addFile('allowlist.json', utf8.encode('[]\n'));
     await bdsZip.close();
 
@@ -114,6 +118,10 @@ void main() {
     expect(await File(p.box64).exists(), isTrue, reason: 'box64 inside rootfs');
     expect(await File(p.bedrockServer).exists(), isTrue);
     expect(await File('$baseDir/server/server.properties').exists(), isTrue);
+    // Product-managed transport: nethernet must never survive install.
+    final props = await File('$baseDir/server/server.properties').readAsString();
+    expect(props, contains('transport=raknet'));
+    expect(props, isNot(contains('nethernet')));
     expect(await File(p.installedMarker).exists(), isTrue, reason: 'marker last');
 
     expect((await runtime.verify()).isHealthy, isTrue);
@@ -186,6 +194,11 @@ void main() {
 
     // Player data survived.
     expect(await File('${p.server}/worlds/Bedrock level/level.dat').exists(), isTrue);
+    // Managed transport survives repairs even when the preserved user file
+    // lacked the line entirely (it would silently fall back to nethernet).
+    final repaired = await File('${p.server}/server.properties').readAsString();
+    expect(repaired, contains('transport=raknet'));
+    expect(repaired, contains('motd=Server Saya'));
     expect(await File('${p.server}/allowlist.json').readAsString(), contains('Steve'));
     final props = await File('${p.server}/server.properties').readAsString();
     expect(props, contains('motd=Server Saya'));
