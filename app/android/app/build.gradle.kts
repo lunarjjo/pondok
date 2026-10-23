@@ -34,6 +34,16 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    lint {
+        // targetSdk 28 is an architectural decision: the app must exec
+        // downloaded binaries (BDS, playit agent) from app-private storage,
+        // which the legacy SELinux domain (targetSdk <= 28) permits — the
+        // same approach Termux uses (docs/ARCHITECTURE.md §2, RISK R-01).
+        // This app is sideload-only and will never ship on Google Play, so
+        // the Play-policy lint is disabled explicitly (not silenced globally).
+        disable += "ExpiredTargetSdkVersion"
+    }
 }
 
 kotlin {
