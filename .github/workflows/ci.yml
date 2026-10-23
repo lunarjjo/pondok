@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BDS_VERSION: "1.26.52.3"
+  BDS_SHA256: "f6348d84fa714d04ca194f207e89453ca6bba0a1359396475271a52a150471c6"
+  BDS_ZIP_BYTES: "94927522"
+  BDS_UA: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+
+jobs:
+  core-unit:
+    name: Core · unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/pondok_core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - run: dart pub get
+      - run: dart analyze --fatal-infos
+      - run: dart test
+        env:
+          PODOK_NETWORK_TESTS: "1"
+
+  core-integration:
+    name: Core · REAL BDS integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: packages/pondok_core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - run: dart pub get
+
+      # Official distribution, cached by version + SHA-256. The same pin
+      # lives in docs/PHASE0_REPORT.md; bump both together. A browser-like
+      # User-Agent is REQUIRED (Phase 0 finding: plain curl gets HTTP 308).
+      - name: Cache official BDS zip
+        uses: actions/cache@v4
+        with:
+          path: ~/bds/bedrock-server-${{ env.BDS_VERSION }}.zip
+          key: bds-${{ env.BDS_VERSION }}-${{ env.BDS_SHA256 }}
+      - name: Download + verify + extract official BDS
+        run: |
+          mkdir -p "$HOME/bds" && cd "$HOME/bds"
+          Z="bedrock-server-${BDS_VERSION}.zip"
+          if [ ! -f "$Z" ] || [ "$(stat -c%s "$Z")" != "${BDS_ZIP_BYTES}" ]; then
+            echo "downloading $Z from the official source..."
+            curl -sSL -o "$Z" -H "User-Agent: ${BDS_UA}" \
+              "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/$Z"
+          fi
+          echo "${BDS_SHA256}  $Z" | sha256sum -c
+          rm -rf extracted && mkdir extracted
+          unzip -q "$Z" -d extracted/
+          ls extracted/ | head -5
+      - name: Run real-binary integration suite
+        run: dart test test/integration/
+        env:
+          PODOK_BDS_DIR: /home/runner/bds/extracted
+
+  app:
+    name: App · analyze + tests + APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze --fatal-infos
+      - run: flutter test
+      - name: Build release APK (targetSdk 28 by design — see ARCHITECTURE.md §2)
+        run: |
+          echo "sdk.dir=${ANDROID_SDK_ROOT}" > android/local.properties
+          echo "flutter.sdk=$(dirname $(dirname $(readlink -f $(which flutter))))" >> android/local.properties
+          flutter build apk --release
+      - name: Report APK
+        run: |
+          ls -la build/app/outputs/flutter-apk/
+          "${ANDROID_SDK_ROOT}/build-tools/"*/aapt dump badging \
+            build/app/outputs/flutter-apk/app-release.apk | head -3 || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pondok-apk
+          path: app/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30

@@ -1,0 +1,26 @@
+.dart_tool/
+.packages
+build/
+*.iml
+.idea/
+.vscode/
+local.properties
+*.log
+.DS_Store
+# Never commit: downloaded distributions, secrets, world data
+*.zip
+!docs/evidence/*.zip.sha256
+bds.zip
+server/
+server_pristine/
+playit*
+rootfs/
+*.jks
+*.keystore
+key.properties
+.pub-cache/
+.pub/
+coverage/
+packages/pondok_dev/
+app/.flutter-plugins-dependencies
+app/android/app/src/main/java/

@@ -1,0 +1,28 @@
+name: pondok
+description: >-
+  Bedrock Mobile Server Manager — turn a compatible Android phone into a
+  managed Minecraft Bedrock Dedicated Server host: runtime management,
+  console, players, backups, safe updates, and UDP tunneling.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  pondok_core:
+    path: ../packages/pondok_core
+  provider: ^6.1.2
+  path_provider: ^2.1.5
+  shared_preferences: ^2.3.2
+  intl: ^0.19.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

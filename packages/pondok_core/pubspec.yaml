@@ -1,0 +1,14 @@
+name: pondok_core
+description: >-
+  Pure-Dart management core for Pondok, the Minecraft Bedrock Dedicated
+  Server manager for Android. Zero external dependencies: only the Dart
+  standard library, so the core runs and is tested on any host — including
+  CI runners that execute the real bedrock_server binary.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dev_dependencies:
+  test: ^1.25.0
