@@ -11,12 +11,14 @@ import 'package:flutter/services.dart';
 class PackSource {
   static const _channel = MethodChannel('pondok/assets');
 
-  /// [assetName] as the Android AssetManager sees it (Flutter assets live
-  /// under `flutter_assets/` inside the APK).
+  /// [assetName] is the plain Flutter asset path (as declared in pubspec).
+  /// The Android AssetManager needs the APK-level prefix — that mapping
+  /// lives HERE, not at every call site; the test fallback then uses the
+  /// plain path against rootBundle.
   Future<void> copyTo(String assetName, String destFile) async {
     try {
       await _channel.invokeMethod<int>('copyAsset', {
-        'name': assetName,
+        'name': 'flutter_assets/$assetName',
         'dest': destFile,
       });
     } on MissingPluginException {

@@ -43,7 +43,9 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _boot() async {
     if (widget.setupController != null && widget.serverController != null) {
       _attach(widget.setupController!, widget.serverController!);
-      await _setup!.ensureInstalled();
+      // Controller may already be ready (pre-warmed, or tests): skip the
+      // redundant install check instead of re-running IO.
+      if (!_setup!.isReady) await _setup!.ensureInstalled();
       return;
     }
     // Production path: app-private files dir.

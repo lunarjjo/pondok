@@ -53,7 +53,7 @@ class RuntimeSetupController extends ChangeNotifier {
       _set(RuntimeSetupPhase.copyingPack);
       final packFile = '$baseDir/runtime_pack.zip.download';
       await Directory(baseDir).create(recursive: true);
-      await packSource.copyTo('flutter_assets/$assetName', packFile);
+      await packSource.copyTo(assetName, packFile);
 
       _set(RuntimeSetupPhase.installing);
       // Repair semantics: force only when a marker exists but the tree is
